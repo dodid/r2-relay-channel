@@ -1,0 +1,408 @@
+import { R2Client } from "./r2client.js";
+import { HeadDoc, IdentityDoc, MessageMeta, R2Relay } from "./protocol.js";
+import type { LifecycleRule } from "@aws-sdk/client-s3";
+
+export const IDENTITY_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
+export interface ServiceConfig {
+  endpoint: string;
+  bucket: string;
+  region?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  forcePathStyle?: boolean;
+  peerId: string;
+  defaultTtlDays?: number;
+  manageLifecycle?: boolean;
+  attachmentTtlDays?: number;
+}
+
+export interface InboxMessage {
+  key: string;
+  message: MessageMeta;
+}
+
+export interface InboxBatch {
+  head: HeadDoc | null;
+  messages: InboxMessage[];
+}
+
+export interface SendMessageOptions {
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  serverPeer?: string | null;
+  streamId?: string | null;
+  streamSeq?: number | null;
+  streamState?: "partial" | "final" | null;
+  typeOverride?: string | null;
+  reactionTargetMessageId?: string | null;
+  reactionEmoji?: string | null;
+  reactionRemove?: boolean | null;
+}
+
+export class Service {
+  client: R2Client;
+  relay: R2Relay;
+  cfg: ServiceConfig;
+  private sendLanes = new Map<string, Promise<{ key: string; messageId: string; expiresAt: number }>>();
+
+  constructor(cfg: ServiceConfig) {
+    this.cfg = cfg;
+    this.client = new R2Client(cfg);
+    this.relay = new R2Relay({ bucket: cfg.bucket });
+  }
+
+  async ensureLifecycleRules() {
+    if (this.cfg.manageLifecycle === false) {
+      return;
+    }
+
+    const messageDays = Math.max(1, Math.floor(this.cfg.defaultTtlDays ?? 7));
+    const attachmentDays = Math.max(1, Math.floor(this.cfg.attachmentTtlDays ?? messageDays));
+    const managedIds = new Set([
+      "r2-relay-channel-expire-msg",
+      "r2-relay-channel-expire-att",
+      "r2-relay-channel-expire-identity",
+    ]);
+    const existing = await this.client.getBucketLifecycleRules();
+    const preserved = existing.filter((rule) => !managedIds.has(rule.ID ?? ""));
+
+    const managed: LifecycleRule[] = [
+      {
+        ID: "r2-relay-channel-expire-msg",
+        Status: "Enabled",
+        Filter: { Prefix: "msg/" },
+        Expiration: { Days: messageDays },
+      },
+      {
+        ID: "r2-relay-channel-expire-att",
+        Status: "Enabled",
+        Filter: { Prefix: "att/" },
+        Expiration: { Days: attachmentDays },
+      },
+      {
+        // S3-compatible lifecycle expiration is day-granularity, so 1 day is the
+        // closest physical cleanup interval we can enforce for identity docs.
+        ID: "r2-relay-channel-expire-identity",
+        Status: "Enabled",
+        Filter: { Prefix: "identity/" },
+        Expiration: { Days: 1 },
+      },
+    ];
+
+    await this.client.putBucketLifecycleRules([...preserved, ...managed]);
+  }
+
+  async publishIdentity(identity?: Partial<IdentityDoc>) {
+    const key = this.relay.makeIdentityKey(this.cfg.peerId);
+    const doc: IdentityDoc = {
+      role: "server",
+      version: "0.1.0",
+      capabilities: ["text", "protocol:v1", "assistant-stream-snapshots:v1"],
+      contact: null,
+      ...(identity ?? {}),
+      peer: identity?.peer ?? this.cfg.peerId,
+      last_seen: identity?.last_seen ?? Date.now(),
+    };
+    await this.client.putObject(key, JSON.stringify(doc), "application/json");
+    return doc;
+  }
+
+  async publishIdentify(identity?: Partial<IdentityDoc>) {
+    return this.publishIdentity(identity);
+  }
+
+  async getIdentity(peer: string): Promise<IdentityDoc | null> {
+    const key = this.relay.makeIdentityKey(peer);
+    try {
+      const res = await this.client.getObject(key);
+      if (!res?.Body) {
+        return null;
+      }
+      const body = await streamToUtf8(res.Body as unknown);
+      return JSON.parse(body) as IdentityDoc;
+    } catch {
+      return null;
+    }
+  }
+
+  async sendMessage(
+    to: string,
+    body: string,
+    attachments?: { key: string; size?: number; content_type?: string }[],
+    ttlDays?: number,
+    options?: SendMessageOptions,
+  ) {
+    const previous = this.sendLanes.get(to) ?? Promise.resolve({ key: "", messageId: "", expiresAt: 0 });
+    const current = previous
+      .catch(() => ({ key: "", messageId: "", expiresAt: 0 }))
+      .then(() => this.sendMessageUnlocked(to, body, attachments, ttlDays, options));
+    this.sendLanes.set(to, current);
+    try {
+      return await current;
+    } finally {
+      if (this.sendLanes.get(to) === current) {
+        this.sendLanes.delete(to);
+      }
+    }
+  }
+
+  private async sendMessageUnlocked(
+    to: string,
+    body: string,
+    attachments?: { key: string; size?: number; content_type?: string }[],
+    _ttlDays?: number,
+    options?: SendMessageOptions,
+  ) {
+    const now = Date.now();
+    const hasStream = Boolean(options?.streamId);
+    const headKey = this.relay.makeHeadKey(to);
+    const maxRetries = 8;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const currentHead = await this.getHeadState(to);
+      const prevKey = currentHead?.doc.head_key ?? null;
+      const key = this.relay.makeMsgKey(to, Date.now());
+      const msg: MessageMeta = {
+        msg_id: this.relay.shortUuid(),
+        from: this.cfg.peerId,
+        to,
+        ts_sent: now,
+        prev_key: prevKey,
+        type: options?.typeOverride ?? (hasStream ? "assistant_stream" : attachments && attachments.length ? "attachment" : "text"),
+        body,
+        attachments: attachments || [],
+        size: body ? Buffer.byteLength(body) : 0,
+        sig: null,
+        session_key: options?.sessionKey ?? null,
+        session_id: options?.sessionId ?? null,
+        server_peer: options?.serverPeer ?? null,
+        stream_id: options?.streamId ?? null,
+        stream_seq: options?.streamSeq ?? null,
+        stream_state: options?.streamState ?? null,
+        reaction_target_msg_id: options?.reactionTargetMessageId ?? null,
+        reaction_emoji: options?.reactionEmoji ?? null,
+        reaction_remove: options?.reactionRemove ?? null,
+      };
+      const newHead: HeadDoc = {
+        head_key: key,
+        head_msg_id: msg.msg_id,
+        head_ts: Date.now(),
+        head_etag: undefined,
+      };
+
+      await this.client.putObject(key, JSON.stringify(msg), "application/json", undefined, undefined, "*");
+
+      try {
+        if (!currentHead?.doc) {
+          await this.client.putObject(headKey, JSON.stringify(newHead), "application/json", undefined, undefined, "*");
+        } else {
+          if (!currentHead.etag) {
+            throw new Error("Missing head ETag for CAS update");
+          }
+          await this.client.putObject(headKey, JSON.stringify(newHead), "application/json", undefined, currentHead.etag, undefined);
+        }
+        return { key, messageId: msg.msg_id, expiresAt: 0 };
+      } catch (err: unknown) {
+        if (!isPreconditionFailure(err)) {
+          throw err;
+        }
+        await sleep(20 + Math.random() * 80);
+      }
+    }
+
+    throw new Error("Failed to append message after CAS retries");
+  }
+
+  async sendStreamingSnapshots(
+    to: string,
+    snapshots: string[],
+    ttlDays?: number,
+    options?: Omit<SendMessageOptions, "streamSeq" | "streamState">,
+  ) {
+    const streamId = options?.streamId ?? this.relay.shortUuid();
+    const results = [] as Array<{ key: string; messageId: string; expiresAt: number }>;
+
+    for (let index = 0; index < snapshots.length; index++) {
+      const body = snapshots[index] ?? "";
+      if (!body.trim()) {
+        continue;
+      }
+      const isFinal = index === snapshots.length - 1;
+      const result = await this.sendMessage(to, body, undefined, ttlDays, {
+        ...options,
+        streamId,
+        streamSeq: index + 1,
+        streamState: isFinal ? "final" : "partial",
+        typeOverride: "assistant_stream",
+      });
+      results.push(result);
+    }
+
+    return { streamId, results };
+  }
+
+  async getHead(peer: string): Promise<HeadDoc | null> {
+    return (await this.getHeadState(peer))?.doc ?? null;
+  }
+
+  async getHeadState(peer: string): Promise<{ doc: HeadDoc; etag: string | null } | null> {
+    const key = this.relay.makeHeadKey(peer);
+    try {
+      const res = await this.client.getJsonWithEtag<HeadDoc>(key);
+      return res ? { doc: res.body, etag: res.etag } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async readMessage(key: string): Promise<MessageMeta | null> {
+    const res = await this.client.getObject(key);
+    if (!res?.Body) {
+      return null;
+    }
+    const body = await streamToUtf8(res.Body as unknown);
+    return JSON.parse(body) as MessageMeta;
+  }
+
+  async markMessageProcessed(
+    key: string,
+    patch: {
+      processedAt?: number;
+      processedBy?: string | null;
+      processedState?: string | null;
+    },
+  ): Promise<MessageMeta | null> {
+    const msg = await this.readMessage(key);
+    if (!msg) {
+      return null;
+    }
+    const updated: MessageMeta = {
+      ...msg,
+      processed_at: patch.processedAt ?? Date.now(),
+      processed_by: patch.processedBy ?? this.cfg.peerId,
+      processed_state: patch.processedState ?? msg.processed_state ?? "processed",
+    };
+    await this.client.putObject(key, JSON.stringify(updated), "application/json");
+    return updated;
+  }
+
+  async collectInboxMessages(selfId: string, lastSeenKey: string | null): Promise<InboxBatch> {
+    const head = await this.getHead(selfId);
+    if (!head?.head_key || head.head_key === lastSeenKey) {
+      return { head, messages: [] };
+    }
+
+    let current: string | null = head.head_key;
+    const toProcess: InboxMessage[] = [];
+    const visitedKeys = new Set<string>();
+    const MAX_CHAIN_DEPTH = 500;
+
+    while (current && current !== lastSeenKey) {
+      if (visitedKeys.has(current) || toProcess.length >= MAX_CHAIN_DEPTH) {
+        break;
+      }
+      visitedKeys.add(current);
+      const msg = await this.readMessage(current);
+      if (!msg) {
+        break;
+      }
+      toProcess.push({ key: current, message: msg });
+      current = msg.prev_key || null;
+    }
+
+    toProcess.reverse();
+    return { head, messages: toProcess };
+  }
+
+  async pollInbox(
+    selfId: string,
+    handler: (msg: MessageMeta, key: string) => Promise<void>,
+    pollIntervalMs = 5000,
+    backoffMax = 40000,
+    deleteAfterProcessing = true,
+    abortSignal?: AbortSignal,
+  ) {
+    let interval = pollIntervalMs;
+    let lastSeenKey: string | null = null;
+
+    while (!abortSignal?.aborted) {
+      try {
+        const batch = await this.collectInboxMessages(selfId, lastSeenKey);
+        if (batch.messages.length > 0) {
+          for (const item of batch.messages) {
+            await handler(item.message, item.key);
+            if (deleteAfterProcessing) {
+              await this.client.deleteObject(item.key);
+            }
+          }
+          lastSeenKey = batch.head?.head_key ?? lastSeenKey;
+          interval = pollIntervalMs;
+        }
+
+        await sleep(interval, abortSignal);
+        if (!batch.head?.head_key) {
+          interval = Math.min(interval * 2, backoffMax);
+        }
+      } catch (err) {
+        if (abortSignal?.aborted) {
+          break;
+        }
+        console.error("Poll error", err);
+        await sleep(interval, abortSignal);
+        interval = Math.min(interval * 2, backoffMax);
+      }
+    }
+  }
+}
+
+function isPreconditionFailure(err: unknown): boolean {
+  const value = err as { code?: string } | null;
+  return value?.code === "PreconditionFailed";
+}
+
+async function streamToUtf8(stream: unknown): Promise<string> {
+  if (typeof stream === "string") {
+    return stream;
+  }
+  if (!stream) {
+    return "";
+  }
+
+  const body = stream as {
+    transformToString?: () => Promise<string>;
+    [Symbol.asyncIterator]?: () => AsyncIterator<unknown>;
+  };
+
+  if (typeof body.transformToString === "function") {
+    return await body.transformToString();
+  }
+
+  if (typeof body[Symbol.asyncIterator] === "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body as AsyncIterable<unknown>) {
+      chunks.push(Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+
+  return String(stream);
+}
+
+async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (!abortSignal) {
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    if (abortSignal.aborted) {
+      onAbort();
+      return;
+    }
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+}

@@ -1,0 +1,12 @@
+{
+  "id": "r2-relay-channel",
+  "kind": "channel",
+  "name": "R2 Relay Channel",
+  "description": "Cloudflare R2 relay channel plugin for OpenClaw by ClawChat App.",
+  "channels": ["r2-relay-channel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

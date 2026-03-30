@@ -1,0 +1,48 @@
+{
+  "name": "r2-relay-channel",
+  "version": "0.1.0",
+  "description": "OpenClaw R2 relay channel plugin",
+  "type": "module",
+  "main": "dist/r2-relay.js",
+  "types": "dist/r2-relay.d.ts",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/check-openclaw-version.mjs && tsc -p tsconfig.json && node scripts/prepare-dist.mjs",
+    "lint": "echo 'no-lint-config'",
+    "test": "node --no-warnings dist/bin.js test",
+    "pack": "npm pack",
+    "prepare": "npm run build"
+  },
+  "author": "Guai",
+  "license": "BSD-3-Clause",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/r2-relay.js"
+    ],
+    "setupEntry": "./dist/setup-entry.js",
+    "channel": {
+      "id": "r2-relay-channel",
+      "label": "R2 Relay by ClawChat App",
+      "selectionLabel": "R2 Relay by ClawChat App",
+      "docsPath": "/channels/r2-relay-channel",
+      "docsLabel": "r2-relay-channel",
+      "blurb": "Cloudflare R2-backed relay channel for direct text messages.",
+      "order": 120
+    }
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tgz
+r2relay.local.json
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+coverage/
