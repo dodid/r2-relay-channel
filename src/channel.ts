@@ -449,7 +449,11 @@ async function dispatchInboundMessage(params: {
     },
   });
   const route = params.sessionKey?.trim()
-    ? { ...resolvedRoute, sessionKey: params.sessionKey.trim() }
+    ? {
+        ...resolvedRoute,
+        agentId: agentIdFromSessionKey(params.sessionKey.trim()),
+        sessionKey: params.sessionKey.trim(),
+      }
     : resolvedRoute;
 
   const storePath = core.channel.session.resolveStorePath(
@@ -696,73 +700,105 @@ async function collectPublishedModelCapabilities(_account: ResolvedR2RelayAccoun
 }
 
 async function collectPublishedSessions(_account: ResolvedR2RelayAccount): Promise<IdentitySessionDoc[]> {
-  try {
-    const store = await readPublishedSessionStore();
-    return Object.entries(store)
-      .filter(([sessionKey]) => typeof sessionKey === "string" && sessionKey.startsWith("agent:main:"))
-      .map(([sessionKey, entry]) => ({
-        session_key: sessionKey,
-        session_id: typeof entry?.sessionId === "string" ? entry.sessionId : null,
-        updated_at: typeof entry?.updatedAt === "number" ? entry.updatedAt : null,
-        chat_type: typeof entry?.chatType === "string" ? entry.chatType : null,
-        channel:
-          typeof entry?.lastChannel === "string"
-            ? entry.lastChannel
-            : typeof entry?.deliveryContext?.channel === "string"
-              ? entry.deliveryContext.channel
-              : null,
-        account_id:
-          typeof entry?.lastAccountId === "string"
-            ? entry.lastAccountId
-            : typeof entry?.deliveryContext?.accountId === "string"
-              ? entry.deliveryContext.accountId
-              : null,
-      }))
-      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  } catch {
-    return [];
+  const sessions: IdentitySessionDoc[] = [];
+
+  for (const agentId of listConfiguredAgentIds()) {
+    let hasMainSession = false;
+    try {
+      const store = await readPublishedSessionStore(agentId);
+      for (const [sessionKey, entry] of Object.entries(store)) {
+        if (typeof sessionKey !== "string" || !sessionKey.startsWith(`agent:${agentId}:`)) {
+          continue;
+        }
+        if (sessionKey === `agent:${agentId}:main`) {
+          hasMainSession = true;
+        }
+        sessions.push(identitySessionDocFromEntry(sessionKey, entry));
+      }
+    } catch {
+      // No session store yet for this agent; still publish its synthetic main chat.
+    }
+
+    if (!hasMainSession) {
+      sessions.push(syntheticMainSessionDoc(agentId));
+    }
   }
+
+  return sessions.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 }
 
-async function readPublishedSessionStore(): Promise<Record<string, any>> {
+function listConfiguredAgentIds(): string[] {
+  const cfg = getRelayConfig() as { agents?: { list?: Array<{ id?: string | null }> } };
+  const ids = new Set<string>(["main"]);
+  for (const agent of cfg.agents?.list ?? []) {
+    const id = agent?.id?.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids);
+}
+
+function agentIdFromSessionKey(sessionKey: string): string {
+  const parts = sessionKey.split(":");
+  if (parts.length >= 2 && parts[0] === "agent" && parts[1]?.trim()) {
+    return parts[1].trim();
+  }
+  return "main";
+}
+
+function identitySessionDocFromEntry(sessionKey: string, entry: any): IdentitySessionDoc {
+  return {
+    session_key: sessionKey,
+    session_id: typeof entry?.sessionId === "string" ? entry.sessionId : null,
+    updated_at: typeof entry?.updatedAt === "number" ? entry.updatedAt : null,
+    chat_type: typeof entry?.chatType === "string" ? entry.chatType : null,
+    channel:
+      typeof entry?.lastChannel === "string"
+        ? entry.lastChannel
+        : typeof entry?.deliveryContext?.channel === "string"
+          ? entry.deliveryContext.channel
+          : null,
+    account_id:
+      typeof entry?.lastAccountId === "string"
+        ? entry.lastAccountId
+        : typeof entry?.deliveryContext?.accountId === "string"
+          ? entry.deliveryContext.accountId
+          : null,
+  };
+}
+
+function syntheticMainSessionDoc(agentId: string): IdentitySessionDoc {
+  return {
+    session_key: `agent:${agentId}:main`,
+    session_id: null,
+    updated_at: null,
+    chat_type: "direct",
+    channel: null,
+    account_id: null,
+  };
+}
+
+async function readPublishedSessionStore(agentId = "main"): Promise<Record<string, any>> {
   const storePath = getRelayRuntime().channel.session.resolveStorePath(undefined, {
-    agentId: "main",
+    agentId,
   });
   const raw = await fs.promises.readFile(storePath, "utf8");
   return JSON.parse(raw) as Record<string, any>;
 }
 
 async function readPublishedSessionEntry(sessionKey: string): Promise<IdentitySessionDoc | null> {
+  const agentId = agentIdFromSessionKey(sessionKey);
+  const syntheticMain = sessionKey === `agent:${agentId}:main` ? syntheticMainSessionDoc(agentId) : null;
   try {
-    const storePath = getRelayRuntime().channel.session.resolveStorePath(undefined, {
-      agentId: "main",
-    });
-    const raw = await fs.promises.readFile(storePath, "utf8");
-    const store = JSON.parse(raw) as Record<string, any>;
+    const store = await readPublishedSessionStore(agentId);
     const entry = store[sessionKey];
     if (!entry) {
-      return null;
+      return syntheticMain;
     }
-    return {
-      session_key: sessionKey,
-      session_id: typeof entry?.sessionId === "string" ? entry.sessionId : null,
-      updated_at: typeof entry?.updatedAt === "number" ? entry.updatedAt : null,
-      chat_type: typeof entry?.chatType === "string" ? entry.chatType : null,
-      channel:
-        typeof entry?.lastChannel === "string"
-          ? entry.lastChannel
-          : typeof entry?.deliveryContext?.channel === "string"
-            ? entry.deliveryContext.channel
-            : null,
-      account_id:
-        typeof entry?.lastAccountId === "string"
-          ? entry.lastAccountId
-          : typeof entry?.deliveryContext?.accountId === "string"
-            ? entry.deliveryContext.accountId
-            : null,
-    };
+    return identitySessionDocFromEntry(sessionKey, entry);
   } catch {
-    return null;
+    return syntheticMain;
   }
 }
 
