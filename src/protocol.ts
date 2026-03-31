@@ -48,7 +48,7 @@ export interface IdentityModelDoc {
 export interface IdentityDoc {
   peer: string;
   role: string;
-  version: string;
+  plugin_version?: string | null;
   capabilities: string[];
   contact: string | null;
   last_seen: number;

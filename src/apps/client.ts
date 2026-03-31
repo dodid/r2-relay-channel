@@ -14,6 +14,8 @@ async function main() {
 
   const peerId = cfg.clientId || "client-1";
   const serverId = cfg.serverId || "gateway";
+  const defaultSessionKey = cfg.sessionKey || "agent:main:main";
+  const defaultSessionId = cfg.sessionId || null;
   const svc = new Service({
     endpoint: cfg.endpoint,
     bucket: cfg.bucket,
@@ -30,7 +32,11 @@ async function main() {
   setInterval(async () => {
     const text = `hello ${i++} from ${peerId} at ${Date.now()}`;
     try {
-      const res = await svc.sendMessage(serverId, text);
+      const res = await svc.sendMessage(serverId, text, undefined, undefined, {
+        sessionKey: defaultSessionKey,
+        sessionId: defaultSessionId,
+        serverPeer: serverId,
+      });
       console.log("sent", res.key);
     } catch (err) {
       console.error("send failed", err);
@@ -48,7 +54,11 @@ async function main() {
         "body:",
         msg.body,
       );
-      await svc.sendMessage(msg.from, `ack:${msg.msg_id}`);
+      await svc.sendMessage(msg.from, `ack:${msg.msg_id}`, undefined, undefined, {
+        sessionKey: msg.session_key ?? defaultSessionKey,
+        sessionId: msg.session_id ?? defaultSessionId,
+        serverPeer: serverId,
+      });
     },
     cfg.pollIntervalMs || 5000,
     40000,

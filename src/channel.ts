@@ -27,7 +27,7 @@ import {
   type RelayCheckpointState,
 } from "./checkpoint-store.js";
 import { getRelayConfig, getRelayRuntime } from "./runtime.js";
-import { IDENTITY_REFRESH_INTERVAL_MS, Service } from "./service.js";
+import { IDENTITY_REFRESH_INTERVAL_MS, RELAY_PLUGIN_VERSION, Service } from "./service.js";
 import type { IdentitySessionDoc } from "./protocol.js";
 
 const activeServices = new Map<string, Service>();
@@ -667,7 +667,7 @@ async function syncPublishedIdentity(service: Service, account: ResolvedR2RelayA
     peer: account.serverId,
     display_name: deriveGatewayDisplayName(account.serverId),
     role: "server",
-    version: "0.2.0",
+    plugin_version: RELAY_PLUGIN_VERSION,
     capabilities: ["text", "protocol:v1", "session-selection:v1"],
     contact: null,
     last_seen: now,

@@ -34,7 +34,7 @@ Core capabilities:
 Install the packaged tarball with OpenClaw:
 
 ```bash
-openclaw plugins install /path/to/r2-relay-channel-0.2.0.tgz
+openclaw plugins install /path/to/r2-relay-channel-x.y.z.tgz
 ```
 
 If installation succeeds, restart the gateway:

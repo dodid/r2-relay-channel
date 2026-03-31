@@ -1,8 +1,27 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { R2Client } from "./r2client.js";
 import { HeadDoc, IdentityDoc, MessageMeta, R2Relay } from "./protocol.js";
 import type { LifecycleRule } from "@aws-sdk/client-s3";
 
 export const IDENTITY_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function resolvePluginVersion(): string {
+  try {
+    const pkgPath = path.join(__dirname, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
+    const version = pkg.version?.trim();
+    return version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+export const RELAY_PLUGIN_VERSION = resolvePluginVersion();
 
 export interface ServiceConfig {
   endpoint: string;
@@ -97,7 +116,7 @@ export class Service {
     const key = this.relay.makeIdentityKey(this.cfg.peerId);
     const doc: IdentityDoc = {
       role: "server",
-      version: "0.1.0",
+      plugin_version: RELAY_PLUGIN_VERSION,
       capabilities: ["text", "protocol:v1", "assistant-stream-snapshots:v1"],
       contact: null,
       ...(identity ?? {}),

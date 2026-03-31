@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Service } from "../service.js";
+import { RELAY_PLUGIN_VERSION, Service } from "../service.js";
 import { CHANNEL_ID } from "../config.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,6 +13,8 @@ async function main() {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")).channels[CHANNEL_ID];
 
   const peerId = cfg.serverId || "gateway";
+  const defaultSessionKey = cfg.sessionKey || "agent:main:main";
+  const defaultSessionId = cfg.sessionId || null;
   const svc = new Service({
     endpoint: cfg.endpoint,
     bucket: cfg.bucket,
@@ -23,7 +25,23 @@ async function main() {
     peerId,
   });
 
-  await svc.publishIdentity();
+  await svc.publishIdentity({
+    peer: peerId,
+    display_name: cfg.displayName || peerId,
+    role: "server",
+    plugin_version: RELAY_PLUGIN_VERSION,
+    capabilities: ["text", "protocol:v1", "session-selection:v1"],
+    contact: null,
+    last_seen: Date.now(),
+    sessions: [
+      {
+        session_key: defaultSessionKey,
+        session_id: defaultSessionId,
+        updated_at: Date.now(),
+        chat_type: "direct",
+      },
+    ],
+  });
 
   svc.pollInbox(
     peerId,
@@ -36,8 +54,8 @@ async function main() {
         `done\n\nreceived:\n- ${body}\n\nresult: processed:${msg.msg_id}`,
       ];
       await svc.sendStreamingSnapshots(msg.from, snapshots, undefined, {
-        sessionKey: msg.session_key ?? null,
-        sessionId: msg.session_id ?? null,
+        sessionKey: msg.session_key ?? defaultSessionKey,
+        sessionId: msg.session_id ?? defaultSessionId,
         serverPeer: peerId,
       });
     },
