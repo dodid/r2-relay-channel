@@ -7,6 +7,15 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "r2-relay-channel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "configFile": { "type": "string" }
+        }
+      }
+    }
   }
 }

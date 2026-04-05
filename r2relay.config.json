@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "endpoint": "https://<account>.r2.cloudflarestorage.com",
+  "bucket": "<bucket>",
+  "accessKeyId": "<access-key-id>",
+  "secretAccessKey": "<secret-access-key>",
+  "serverId": "gateway-home",
+  "pollIntervalMs": 5000,
+  "backoffMaxMs": 40000,
+  "ttl": {
+    "msg": 7,
+    "att": 7,
+    "identity": 1,
+    "head": 30
+  }
+}

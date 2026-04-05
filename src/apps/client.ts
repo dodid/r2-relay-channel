@@ -32,7 +32,7 @@ async function main() {
   setInterval(async () => {
     const text = `hello ${i++} from ${peerId} at ${Date.now()}`;
     try {
-      const res = await svc.sendMessage(serverId, text, undefined, undefined, {
+      const res = await svc.sendMessage(serverId, text, undefined, {
         sessionKey: defaultSessionKey,
         sessionId: defaultSessionId,
         serverPeer: serverId,
@@ -54,7 +54,7 @@ async function main() {
         "body:",
         msg.body,
       );
-      await svc.sendMessage(msg.from, `ack:${msg.msg_id}`, undefined, undefined, {
+      await svc.sendMessage(msg.from, `ack:${msg.msg_id}`, undefined, {
         sessionKey: msg.session_key ?? defaultSessionKey,
         sessionId: msg.session_id ?? defaultSessionId,
         serverPeer: serverId,

@@ -51,9 +51,7 @@ openclaw plugins inspect r2-relay-channel
 
 ## Configure OpenClaw
 
-You can configure `r2-relay-channel` in two ways.
-
-### Option 1: use the OpenClaw config wizard
+Use the OpenClaw config wizard.
 
 After installing the plugin, run:
 
@@ -76,44 +74,33 @@ OpenClaw should expose `r2-relay-channel` as a channel setup flow and prompt for
 
 The wizard suggests a short random server ID candidate automatically, and you can keep it or edit it. Keep it unique if you have multiple gateways sharing the same R2 bucket.
 
-After completing the wizard, restart the gateway:
+### What the wizard saves
 
-```bash
-openclaw gateway restart
+The wizard writes the channel settings into the plugin-side config file:
+
+```text
+<plugin-folder>/r2relay.config.json
 ```
 
-### Option 2: edit OpenClaw config manually
+and keeps the main OpenClaw config minimal by only enabling the channel (and preserving a custom `configFile` path if you explicitly set one).
 
-Add a channel config entry for `r2-relay-channel` in your OpenClaw config.
+By default, the sidecar uses these retention settings:
 
-Example:
-
-```json5
+```json
 {
-  channels: {
-    "r2-relay-channel": {
-      enabled: true,
-      endpoint: "https://<account>.r2.cloudflarestorage.com",
-      bucket: "<bucket>",
-      accessKeyId: "<access-key-id>",
-      secretAccessKey: "<secret-access-key>",
-      serverId: "gateway-home",
-      pollIntervalMs: 5000,
-      backoffMaxMs: 40000,
-      defaultTtlDays: 7
-    }
-  },
-  plugins: {
-    entries: {
-      "r2-relay-channel": {
-        enabled: true
-      }
-    }
+  "ttl": {
+    "msg": 7,
+    "att": 7,
+    "identity": 1,
+    "head": 30
   }
 }
 ```
 
-After updating config, restart the gateway:
+The plugin enforces retention with a daily sweeper:
+- the gateway runs the sweeper in-process once per day after startup
+
+After completing the wizard, restart the gateway:
 
 ```bash
 openclaw gateway restart

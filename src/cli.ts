@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { R2Relay } from "./protocol.js";
 import { Service } from "./service.js";
-import { CHANNEL_ID } from "./config.js";
+import {
+  CHANNEL_ID,
+  DEFAULT_HEAD_TTL_DAYS,
+  DEFAULT_IDENTITY_TTL_DAYS,
+  DEFAULT_TTL_DAYS,
+} from "./config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +23,8 @@ export class Cli {
         return this.test();
       case "clear":
         return this.clear();
+      case "sweep":
+        return this.sweep();
       case "send":
         return this.send(argv.slice(1));
       case "identity":
@@ -32,7 +39,7 @@ export class Cli {
 
   help() {
     console.log(
-      "r2-relay-channel\nCommands:\n  help                              Show this message\n  test                              Run a self-check (no network)\n  clear                             Clear msg/ att/ head/ identity/ in R2 (reads r2relay.local.json)\n  send <to> <msg> [--session-key K] Send a message to <to>, optionally targeting a session\n  identity <peerId>                 Fetch and print identity/<peerId>.json\n  cas-experiment [prefix]           Run CAS/precondition experiments against R2\n  start <peerId>                    Start polling inbox for peerId and print messages\n",
+      "r2-relay-channel\nCommands:\n  help                              Show this message\n  test                              Run a self-check (no network)\n  clear                             Clear msg/ att/ head/ identity/ in R2 (reads r2relay.local.json)\n  sweep                             Run one retention sweep pass (reads r2relay.local.json)\n  send <to> <msg> [--session-key K] Send a message to <to>, optionally targeting a session\n  identity <peerId>                 Fetch and print identity/<peerId>.json\n  start <peerId>                    Start polling inbox for peerId and print messages\n",
     );
   }
 
@@ -62,19 +69,60 @@ export class Cli {
       forcePathStyle: c.forcePathStyle,
       peerId: "cli",
     });
-    await svc.client.listPrefix("msg/", 1000).then(async (objs) => {
-      for (const o of objs) if (o.Key) await svc.client.deleteObject(o.Key);
+
+    let totalDeleted = 0;
+    const clearPrefix = async (prefix: string) => {
+      while (true) {
+        const objs = await svc.client.listPrefix(prefix, 1000);
+        if (!objs.length) {
+          return;
+        }
+        for (const o of objs) {
+          if (!o.Key) continue;
+          await svc.client.deleteObject(o.Key);
+          totalDeleted += 1;
+        }
+        if (objs.length < 1000) {
+          return;
+        }
+      }
+    };
+
+    await clearPrefix("msg/");
+    await clearPrefix("att/");
+    await clearPrefix("head/");
+    await clearPrefix("identity/");
+    console.log(`Clear complete (${totalDeleted} objects deleted)`);
+  }
+
+  async sweep() {
+    const c = await this.loadLocalCfg();
+    const svc = new Service({
+      endpoint: c.endpoint,
+      bucket: c.bucket,
+      region: c.region,
+      accessKeyId: c.accessKeyId,
+      secretAccessKey: c.secretAccessKey,
+      forcePathStyle: c.forcePathStyle,
+      peerId: c.serverId || "cli-sweeper",
     });
-    await svc.client.listPrefix("att/", 1000).then(async (objs) => {
-      for (const o of objs) if (o.Key) await svc.client.deleteObject(o.Key);
+
+    const summaries = await svc.sweepRetention({
+      msg: c.ttl?.msg ?? c.defaultTtlDays ?? DEFAULT_TTL_DAYS,
+      att: c.ttl?.att ?? c.defaultTtlDays ?? DEFAULT_TTL_DAYS,
+      identity: c.ttl?.identity ?? DEFAULT_IDENTITY_TTL_DAYS,
+      head: c.ttl?.head ?? DEFAULT_HEAD_TTL_DAYS,
     });
-    await svc.client.listPrefix("head/", 1000).then(async (objs) => {
-      for (const o of objs) if (o.Key) await svc.client.deleteObject(o.Key);
-    });
-    await svc.client.listPrefix("identity/", 1000).then(async (objs) => {
-      for (const o of objs) if (o.Key) await svc.client.deleteObject(o.Key);
-    });
-    console.log("Clear complete");
+
+    if (!summaries.length) {
+      console.log("Sweep complete: no enabled retention rules");
+      return;
+    }
+
+    for (const summary of summaries) {
+      console.log(`${summary.prefix} scanned=${summary.scanned} deleted=${summary.deleted}`);
+    }
+    console.log("Sweep complete.");
   }
 
   async send(args: string[]) {
@@ -98,7 +146,7 @@ export class Cli {
       forcePathStyle: c.forcePathStyle,
       peerId: c.id || "cli",
     });
-    const res = await svc.sendMessage(to, msgText, undefined, undefined, { sessionKey });
+    const res = await svc.sendMessage(to, msgText, undefined, { sessionKey });
     console.log("Sent message key", res.key);
   }
 

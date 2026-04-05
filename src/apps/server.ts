@@ -53,7 +53,7 @@ async function main() {
         `processing request…\n\nreceived:\n- ${body}\n\nassembling reply...`,
         `done\n\nreceived:\n- ${body}\n\nresult: processed:${msg.msg_id}`,
       ];
-      await svc.sendStreamingSnapshots(msg.from, snapshots, undefined, {
+      await svc.sendStreamingSnapshots(msg.from, snapshots, {
         sessionKey: msg.session_key ?? defaultSessionKey,
         sessionId: msg.session_id ?? defaultSessionId,
         serverPeer: peerId,

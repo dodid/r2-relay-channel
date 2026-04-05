@@ -11,7 +11,6 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import {
   DEFAULT_BACKOFF_MAX_MS,
   DEFAULT_POLL_INTERVAL_MS,
-  DEFAULT_TTL_DAYS,
   r2RelayChannelConfigSchema,
   resolveR2RelayAccount,
   type ResolvedR2RelayAccount,
@@ -104,7 +103,6 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
           to.trim(),
           reaction.remove ? "" : reaction.emoji,
           undefined,
-          account.defaultTtlDays,
           {
             typeOverride: "reaction",
             reactionTargetMessageId: messageId,
@@ -148,7 +146,7 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
     sendText: async ({ cfg, to, text, accountId }) => {
       const account = resolveR2RelayAccount({ cfg, accountId });
       const service = getOrCreateService(account);
-      const result = await service.sendMessage(to.trim(), text, undefined, account.defaultTtlDays);
+      const result = await service.sendMessage(to.trim(), text);
       touchRuntime(account.accountId, {
         lastOutboundAt: Date.now(),
         lastError: null,
@@ -215,6 +213,12 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
           const service = getOrCreateService(account);
           activeServices.set(account.accountId, service);
           await syncPublishedIdentity(service, account, true);
+          void runSweeperLoop({
+            account,
+            service,
+            abortSignal: ctx.abortSignal,
+            log: ctx.log,
+          });
           touchRuntime(account.accountId, {
             running: true as any,
             lastStartAt: Date.now() as any,
@@ -276,12 +280,6 @@ function getOrCreateService(account: ResolvedR2RelayAccount): Service {
     secretAccessKey: account.secretAccessKey,
     forcePathStyle: account.forcePathStyle,
     peerId: account.serverId,
-    defaultTtlDays: account.defaultTtlDays,
-    manageLifecycle: true,
-    attachmentTtlDays: account.defaultTtlDays,
-  });
-  void created.ensureLifecycleRules().catch((err) => {
-    console.warn("[r2-relay-channel] failed to ensure lifecycle rules", err);
   });
   activeServices.set(account.accountId, created);
   return created;
@@ -550,7 +548,6 @@ async function dispatchInboundMessage(params: {
       params.senderId,
       normalized,
       undefined,
-      params.account.defaultTtlDays || DEFAULT_TTL_DAYS,
       {
         ...outboundMeta,
         streamId: streamState.streamId,
@@ -583,7 +580,6 @@ async function dispatchInboundMessage(params: {
       params.senderId,
       normalized,
       undefined,
-      params.account.defaultTtlDays || DEFAULT_TTL_DAYS,
       {
         ...outboundMeta,
         typeOverride: "text",
@@ -814,7 +810,6 @@ async function sendProcessedConfirmation(params: {
     params.targetPeer,
     "✅",
     undefined,
-    params.account.defaultTtlDays || DEFAULT_TTL_DAYS,
     {
       sessionKey: params.sessionKey ?? null,
       sessionId: params.sessionId ?? null,
@@ -843,6 +838,30 @@ function formatInboundRelayBody(msg: {
   return msg.reaction_remove
     ? `Reaction removed: ${emoji || "(cleared)"} on msg ${target}`
     : `Reaction added: ${emoji || "(empty)"} on msg ${target}`;
+}
+
+async function runSweeperLoop(params: {
+  account: ResolvedR2RelayAccount;
+  service: Service;
+  abortSignal?: AbortSignal;
+  log?: {
+    info?: (message: string, meta?: Record<string, unknown>) => void;
+    debug?: (message: string, meta?: Record<string, unknown>) => void;
+    warn?: (message: string, meta?: Record<string, unknown>) => void;
+    error?: (message: string, meta?: Record<string, unknown>) => void;
+  };
+}): Promise<void> {
+  await sleep(60_000, params.abortSignal);
+  while (!params.abortSignal?.aborted) {
+    try {
+      const summaries = await params.service.sweepRetention(params.account.ttl, params.abortSignal);
+      const summaryText = summaries.map((item) => `${item.prefix} scanned=${item.scanned} deleted=${item.deleted}`).join("; ");
+      params.log?.info?.(`[${params.account.accountId}] relay sweeper complete${summaryText ? `: ${summaryText}` : ""}`);
+    } catch (err) {
+      params.log?.warn?.(`[${params.account.accountId}] relay sweeper failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await sleep(24 * 60 * 60 * 1000, params.abortSignal);
+  }
 }
 
 function deriveGatewayDisplayName(serverId: string): string {

@@ -1,13 +1,11 @@
 import {
   DeleteObjectCommand,
-  GetBucketLifecycleConfigurationCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
-  PutBucketLifecycleConfigurationCommand,
   PutObjectCommand,
   S3Client,
-  type LifecycleRule,
   type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
 
@@ -149,35 +147,33 @@ export class R2Client {
     return res.Contents || [];
   }
 
-  async getBucketLifecycleRules(): Promise<LifecycleRule[]> {
-    try {
-      const res = await this.s3.send(
-        new GetBucketLifecycleConfigurationCommand({ Bucket: this.bucket }),
-      );
-      return res.Rules || [];
-    } catch (err: unknown) {
-      const normalized = err as {
-        Code?: string;
-        name?: string;
-        $metadata?: { httpStatusCode?: number };
-      };
-      const code = normalized?.Code || normalized?.name || normalized?.$metadata?.httpStatusCode;
-      if (
-        code === "NoSuchLifecycleConfiguration" ||
-        code === "NoSuchBucketLifecycleConfiguration" ||
-        normalized?.$metadata?.httpStatusCode === 404
-      ) {
-        return [];
-      }
-      throw err;
-    }
+  async listPrefixPage(prefix: string, continuationToken?: string, maxKeys = 1000) {
+    const res = await this.s3.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        MaxKeys: maxKeys,
+        ContinuationToken: continuationToken,
+      }),
+    );
+    return {
+      contents: res.Contents || [],
+      nextContinuationToken: res.NextContinuationToken ?? null,
+      isTruncated: Boolean(res.IsTruncated),
+    };
   }
 
-  async putBucketLifecycleRules(rules: LifecycleRule[]) {
+  async deleteObjects(keys: string[]) {
+    if (keys.length === 0) {
+      return { deleted: [], errors: [] };
+    }
     return await this.s3.send(
-      new PutBucketLifecycleConfigurationCommand({
+      new DeleteObjectsCommand({
         Bucket: this.bucket,
-        LifecycleConfiguration: { Rules: rules },
+        Delete: {
+          Objects: keys.map((Key) => ({ Key })),
+          Quiet: true,
+        },
       }),
     );
   }

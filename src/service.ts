@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { R2Client } from "./r2client.js";
 import { HeadDoc, IdentityDoc, MessageMeta, R2Relay } from "./protocol.js";
-import type { LifecycleRule } from "@aws-sdk/client-s3";
 
 export const IDENTITY_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
@@ -31,9 +30,6 @@ export interface ServiceConfig {
   secretAccessKey?: string;
   forcePathStyle?: boolean;
   peerId: string;
-  defaultTtlDays?: number;
-  manageLifecycle?: boolean;
-  attachmentTtlDays?: number;
 }
 
 export interface InboxMessage {
@@ -59,57 +55,34 @@ export interface SendMessageOptions {
   reactionRemove?: boolean | null;
 }
 
+export interface SendMessageResult {
+  key: string;
+  messageId: string;
+}
+
+export interface RelayRetentionConfig {
+  msg?: number;
+  att?: number;
+  identity?: number;
+  head?: number;
+}
+
+export interface SweepRuleSummary {
+  prefix: string;
+  scanned: number;
+  deleted: number;
+}
+
 export class Service {
   client: R2Client;
   relay: R2Relay;
   cfg: ServiceConfig;
-  private sendLanes = new Map<string, Promise<{ key: string; messageId: string; expiresAt: number }>>();
+  private sendLanes = new Map<string, Promise<SendMessageResult>>();
 
   constructor(cfg: ServiceConfig) {
     this.cfg = cfg;
     this.client = new R2Client(cfg);
     this.relay = new R2Relay({ bucket: cfg.bucket });
-  }
-
-  async ensureLifecycleRules() {
-    if (this.cfg.manageLifecycle === false) {
-      return;
-    }
-
-    const messageDays = Math.max(1, Math.floor(this.cfg.defaultTtlDays ?? 7));
-    const attachmentDays = Math.max(1, Math.floor(this.cfg.attachmentTtlDays ?? messageDays));
-    const managedIds = new Set([
-      "r2-relay-channel-expire-msg",
-      "r2-relay-channel-expire-att",
-      "r2-relay-channel-expire-identity",
-    ]);
-    const existing = await this.client.getBucketLifecycleRules();
-    const preserved = existing.filter((rule) => !managedIds.has(rule.ID ?? ""));
-
-    const managed: LifecycleRule[] = [
-      {
-        ID: "r2-relay-channel-expire-msg",
-        Status: "Enabled",
-        Filter: { Prefix: "msg/" },
-        Expiration: { Days: messageDays },
-      },
-      {
-        ID: "r2-relay-channel-expire-att",
-        Status: "Enabled",
-        Filter: { Prefix: "att/" },
-        Expiration: { Days: attachmentDays },
-      },
-      {
-        // S3-compatible lifecycle expiration is day-granularity, so 1 day is the
-        // closest physical cleanup interval we can enforce for identity docs.
-        ID: "r2-relay-channel-expire-identity",
-        Status: "Enabled",
-        Filter: { Prefix: "identity/" },
-        Expiration: { Days: 1 },
-      },
-    ];
-
-    await this.client.putBucketLifecycleRules([...preserved, ...managed]);
   }
 
   async publishIdentity(identity?: Partial<IdentityDoc>) {
@@ -149,13 +122,12 @@ export class Service {
     to: string,
     body: string,
     attachments?: { key: string; size?: number; content_type?: string }[],
-    ttlDays?: number,
     options?: SendMessageOptions,
   ) {
-    const previous = this.sendLanes.get(to) ?? Promise.resolve({ key: "", messageId: "", expiresAt: 0 });
+    const previous = this.sendLanes.get(to) ?? Promise.resolve({ key: "", messageId: "" });
     const current = previous
-      .catch(() => ({ key: "", messageId: "", expiresAt: 0 }))
-      .then(() => this.sendMessageUnlocked(to, body, attachments, ttlDays, options));
+      .catch(() => ({ key: "", messageId: "" }))
+      .then(() => this.sendMessageUnlocked(to, body, attachments, options));
     this.sendLanes.set(to, current);
     try {
       return await current;
@@ -170,7 +142,6 @@ export class Service {
     to: string,
     body: string,
     attachments?: { key: string; size?: number; content_type?: string }[],
-    _ttlDays?: number,
     options?: SendMessageOptions,
   ) {
     const now = Date.now();
@@ -221,7 +192,7 @@ export class Service {
           }
           await this.client.putObject(headKey, JSON.stringify(newHead), "application/json", undefined, currentHead.etag, undefined);
         }
-        return { key, messageId: msg.msg_id, expiresAt: 0 };
+        return { key, messageId: msg.msg_id };
       } catch (err: unknown) {
         if (!isPreconditionFailure(err)) {
           throw err;
@@ -236,11 +207,10 @@ export class Service {
   async sendStreamingSnapshots(
     to: string,
     snapshots: string[],
-    ttlDays?: number,
     options?: Omit<SendMessageOptions, "streamSeq" | "streamState">,
   ) {
     const streamId = options?.streamId ?? this.relay.shortUuid();
-    const results = [] as Array<{ key: string; messageId: string; expiresAt: number }>;
+    const results: SendMessageResult[] = [];
 
     for (let index = 0; index < snapshots.length; index++) {
       const body = snapshots[index] ?? "";
@@ -248,7 +218,7 @@ export class Service {
         continue;
       }
       const isFinal = index === snapshots.length - 1;
-      const result = await this.sendMessage(to, body, undefined, ttlDays, {
+      const result = await this.sendMessage(to, body, undefined, {
         ...options,
         streamId,
         streamSeq: index + 1,
@@ -334,6 +304,95 @@ export class Service {
     return { head, messages: toProcess };
   }
 
+  async sweepByKeyTimestamp(prefix: string, ttlDays: number, abortSignal?: AbortSignal): Promise<SweepRuleSummary> {
+    const cutoffTs = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+    let continuationToken: string | undefined;
+    let scanned = 0;
+    let deleted = 0;
+
+    while (!abortSignal?.aborted) {
+      const page = await this.client.listPrefixPage(prefix, continuationToken, 1000);
+      const toDelete: string[] = [];
+
+      for (const item of page.contents) {
+        const key = item.Key;
+        if (!key) continue;
+        scanned += 1;
+        const ts = extractTimestampFromRelayKey(key);
+        if (ts !== null && ts < cutoffTs) {
+          toDelete.push(key);
+        }
+      }
+
+      for (let i = 0; i < toDelete.length; i += 500) {
+        const chunk = toDelete.slice(i, i + 500);
+        await this.client.deleteObjects(chunk);
+        deleted += chunk.length;
+      }
+
+      if (!page.isTruncated || !page.nextContinuationToken) {
+        break;
+      }
+      continuationToken = page.nextContinuationToken;
+    }
+
+    return { prefix, scanned, deleted };
+  }
+
+  async sweepByLastModified(prefix: string, ttlDays: number, abortSignal?: AbortSignal): Promise<SweepRuleSummary> {
+    const cutoffTs = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+    let continuationToken: string | undefined;
+    let scanned = 0;
+    let deleted = 0;
+
+    while (!abortSignal?.aborted) {
+      const page = await this.client.listPrefixPage(prefix, continuationToken, 1000);
+      const toDelete: string[] = [];
+
+      for (const item of page.contents) {
+        const key = item.Key;
+        if (!key) continue;
+        scanned += 1;
+        const lastModified = item.LastModified?.getTime?.() ?? null;
+        if (lastModified !== null && lastModified < cutoffTs) {
+          toDelete.push(key);
+        }
+      }
+
+      for (let i = 0; i < toDelete.length; i += 500) {
+        const chunk = toDelete.slice(i, i + 500);
+        await this.client.deleteObjects(chunk);
+        deleted += chunk.length;
+      }
+
+      if (!page.isTruncated || !page.nextContinuationToken) {
+        break;
+      }
+      continuationToken = page.nextContinuationToken;
+    }
+
+    return { prefix, scanned, deleted };
+  }
+
+  async sweepRetention(ttl: RelayRetentionConfig, abortSignal?: AbortSignal): Promise<SweepRuleSummary[]> {
+    const summaries: SweepRuleSummary[] = [];
+
+    if ((ttl.msg ?? 0) > 0) {
+      summaries.push(await this.sweepByKeyTimestamp("msg/", ttl.msg as number, abortSignal));
+    }
+    if ((ttl.att ?? 0) > 0) {
+      summaries.push(await this.sweepByKeyTimestamp("att/", ttl.att as number, abortSignal));
+    }
+    if ((ttl.identity ?? 0) > 0) {
+      summaries.push(await this.sweepByLastModified("identity/", ttl.identity as number, abortSignal));
+    }
+    if ((ttl.head ?? 0) > 0) {
+      summaries.push(await this.sweepByLastModified("head/", ttl.head as number, abortSignal));
+    }
+
+    return summaries;
+  }
+
   async pollInbox(
     selfId: string,
     handler: (msg: MessageMeta, key: string) => Promise<void>,
@@ -378,6 +437,20 @@ export class Service {
 function isPreconditionFailure(err: unknown): boolean {
   const value = err as { code?: string } | null;
   return value?.code === "PreconditionFailed";
+}
+
+function extractTimestampFromRelayKey(key: string): number | null {
+  const name = key.split("/").pop()?.trim() ?? "";
+  const match = name.match(/^(\d{13})-/);
+  if (!match) {
+    return null;
+  }
+  const reversed = Number(match[1]);
+  if (!Number.isFinite(reversed)) {
+    return null;
+  }
+  const ts = 9999999999999 - reversed;
+  return Number.isFinite(ts) ? ts : null;
 }
 
 async function streamToUtf8(stream: unknown): Promise<string> {

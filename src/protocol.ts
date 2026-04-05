@@ -89,10 +89,11 @@ export class R2Relay {
     return `msg/${recipient}/${this.padRevTs(ts)}-${this.shortUuid()}.json`;
   }
 
-  makeAttKey(recipient: string, name?: string) {
+  makeAttKey(recipient: string, name?: string, nowMs?: number) {
+    const ts = nowMs ?? Date.now();
     const id = this.shortUuid();
     const safeName = name ? `-${name.replace(/[^a-zA-Z0-9._-]/g, "")}` : "";
-    return `att/${recipient}/${id}${safeName}`;
+    return `att/${recipient}/${this.padRevTs(ts)}-${id}${safeName}`;
   }
 
   makeHeadKey(recipient: string) {
