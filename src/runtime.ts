@@ -63,4 +63,4 @@ function getPersistedRelayServerId(): string {
   return generated;
 }
 
-export { getPersistedRelayServerId, getRelayConfig, getRelayRuntime, setRelayConfig, setRelayRuntime, setRelayStateDir };
+export { getPersistedRelayServerId, getRelayConfig, getRelayRuntime, resolvePluginStateDir, setRelayConfig, setRelayRuntime, setRelayStateDir };

@@ -13,6 +13,7 @@ Core capabilities:
 - appends messages into recipient-specific chains stored in R2
 - reads inbox heads and walks message chains safely
 - handles streaming-oriented message updates in the relay layer
+- accepts authenticated cron webhook delivery and forwards summaries into a specific relay session
 - packages cleanly as an OpenClaw plugin
 
 ## Why this exists
@@ -48,6 +49,22 @@ You can inspect the installed plugin with:
 ```bash
 openclaw plugins inspect r2-relay-channel
 ```
+
+## Overwrite an installed plugin in place from a `.tgz`
+
+If you want to unpack a built tarball directly over an existing installed plugin directory without deleting the directory itself, use:
+
+```bash
+./scripts/overwrite-installed-plugin.sh /path/to/r2-relay-channel-x.y.z.tgz /path/to/installed/plugin-dir
+```
+
+Example:
+
+```bash
+./scripts/overwrite-installed-plugin.sh ./r2-relay-channel-0.2.0.tgz ~/.openclaw/plugins/r2-relay-channel
+```
+
+This overwrites files that exist in the tarball but does not remove stale files already present in the destination directory.
 
 ## Configure OpenClaw
 
@@ -107,6 +124,117 @@ openclaw gateway restart
 ```
 
 Once configured, use the same R2 connection details in ClawChat app.
+
+## `/session-target` command
+
+The plugin registers a command that shows the current conversation's relay targets.
+
+After at least one inbound relay message has established conversation state, run:
+
+```text
+/session-target
+```
+
+It returns two copy-pasteable code blocks:
+
+- the cron target string
+- the webhook URL or webhook path
+
+## Native `--channel r2-relay-channel --to ...` delivery
+
+The plugin supports native OpenClaw delivery targeting through `--channel r2-relay-channel` and a provider-specific `--to` format.
+
+### Target format
+
+Preferred deterministic target format:
+
+```text
+peer=<peer>,session=<sessionKey>
+```
+
+Example:
+
+```bash
+openclaw cron add \
+  --name "Morning brief" \
+  --cron "0 7 * * *" \
+  --tz "America/Los_Angeles" \
+  --session isolated \
+  --message "Summarize overnight updates." \
+  --announce \
+  --channel r2-relay-channel \
+  --to 'peer=phone-abc123,session=agent:main:main'
+```
+
+Notes:
+
+- `peer` is the relay recipient id.
+- `session` is the exact OpenClaw session key to route into.
+- `,` and `=` are reserved inside values in this minimal format.
+- For backward compatibility, a bare target like `phone-abc123` is still accepted, but it sends without an explicit `sessionKey`.
+
+## Cron webhook delivery to a specific relay session
+
+The plugin exposes a minimal webhook endpoint for cron jobs.
+
+Authentication uses OpenClaw's existing `cron.webhookToken`; there is no separate plugin token.
+
+### Requirements
+
+Set a cron webhook token in your OpenClaw config:
+
+```json5
+{
+  cron: {
+    webhookToken: "replace-with-a-random-secret"
+  }
+}
+```
+
+### Webhook path
+
+```text
+/r2-relay-channel/webhook/<peer>/<url-encoded-session-key>
+```
+
+Examples:
+
+```text
+/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain
+```
+
+### What the webhook accepts
+
+The endpoint expects a JSON POST body. It accepts:
+
+- cron finished-event payloads with a `summary` field
+- simple manual payloads with a `text` field
+- error payloads with an `error` field
+
+It forwards the first non-empty value from `text`, `summary`, or `error` into the specified relay session.
+
+### Cron example
+
+```json
+{
+  "schedule": { "kind": "cron", "expr": "0 9 * * *" },
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Prepare the morning summary"
+  },
+  "delivery": {
+    "mode": "webhook",
+    "to": "https://example.com/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain"
+  }
+}
+```
+
+When cron runs this job, OpenClaw sends:
+
+- `Authorization: Bearer <cron.webhookToken>`
+- the cron finished event JSON body
+
+and the plugin forwards the resulting summary text into the target relay session.
 
 ## Uninstall the plugin from OpenClaw
 

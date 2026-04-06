@@ -28,6 +28,8 @@ import {
 import { getRelayConfig, getRelayRuntime } from "./runtime.js";
 import { IDENTITY_REFRESH_INTERVAL_MS, RELAY_PLUGIN_VERSION, Service } from "./service.js";
 import type { IdentitySessionDoc } from "./protocol.js";
+import { formatRelayTargetHint, parseRelayTarget } from "./target.js";
+import { rememberConversationTarget } from "./conversation-targets.js";
 
 const activeServices = new Map<string, Service>();
 const publishedSessionSignatures = new Map<string, string>();
@@ -135,7 +137,7 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
     normalizeTarget: (target) => target.trim(),
     targetResolver: {
       looksLikeId: (input) => Boolean(input.trim()),
-      hint: "<server-or-peer-id>",
+      hint: `${formatRelayTargetHint()} or <peer>`,
     },
   },
   outbound: {
@@ -146,7 +148,13 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
     sendText: async ({ cfg, to, text, accountId }) => {
       const account = resolveR2RelayAccount({ cfg, accountId });
       const service = getOrCreateService(account);
-      const result = await service.sendMessage(to.trim(), text);
+      const target = parseRelayTarget(to);
+      const result = await service.sendMessage(target.peer, text, undefined, {
+        sessionKey: target.sessionKey,
+        sessionId: null,
+        serverPeer: account.serverId,
+        typeOverride: "text",
+      });
       touchRuntime(account.accountId, {
         lastOutboundAt: Date.now(),
         lastError: null,
@@ -494,6 +502,15 @@ async function dispatchInboundMessage(params: {
     Timestamp: params.timestamp,
     OriginatingChannel: "r2-relay-channel",
     OriginatingTo: `r2-relay-channel:${params.account.serverId}`,
+  });
+
+  rememberConversationTarget({
+    channel: "r2-relay-channel",
+    accountId: params.account.accountId,
+    conversationId: ctxPayload.From,
+    threadId: null,
+    peer: params.senderId,
+    sessionKey: route.sessionKey,
   });
 
   const sessionEntry = await readPublishedSessionEntry(route.sessionKey);
