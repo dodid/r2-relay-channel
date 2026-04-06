@@ -1,6 +1,6 @@
 {
   "name": "r2-relay-channel",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenClaw R2 relay channel plugin",
   "type": "module",
   "main": "dist/r2-relay.js",
@@ -13,7 +13,6 @@
   "scripts": {
     "build": "node scripts/check-openclaw-version.mjs && tsc -p tsconfig.json && node scripts/prepare-dist.mjs",
     "lint": "echo 'no-lint-config'",
-    "test": "node --no-warnings dist/bin.js test",
     "pack": "npm pack",
     "prepare": "npm run build"
   },

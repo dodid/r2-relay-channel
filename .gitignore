@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tgz
+r2relay.config.json
 r2relay.local.json
 npm-debug.log*
 .DS_Store
