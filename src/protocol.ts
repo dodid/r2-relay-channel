@@ -21,6 +21,7 @@ export interface MessageMeta {
   stream_id?: string | null;
   stream_seq?: number | null;
   stream_state?: "partial" | "final" | null;
+  channel_data?: Record<string, unknown> | null;
 }
 
 export interface HeadDoc {

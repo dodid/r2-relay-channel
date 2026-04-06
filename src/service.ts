@@ -53,6 +53,7 @@ export interface SendMessageOptions {
   reactionTargetMessageId?: string | null;
   reactionEmoji?: string | null;
   reactionRemove?: boolean | null;
+  channelData?: Record<string, unknown> | null;
 }
 
 export interface SendMessageResult {
@@ -173,6 +174,7 @@ export class Service {
         reaction_target_msg_id: options?.reactionTargetMessageId ?? null,
         reaction_emoji: options?.reactionEmoji ?? null,
         reaction_remove: options?.reactionRemove ?? null,
+        channel_data: options?.channelData ?? null,
       };
       const newHead: HeadDoc = {
         head_key: key,

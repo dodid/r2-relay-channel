@@ -4,7 +4,7 @@ import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/nextcloud-talk";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/nextcloud-talk";
 import { jsonResult, readReactionParams, readStringParam } from "openclaw/plugin-sdk/telegram-core";
 import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
@@ -66,6 +66,15 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
     chatTypes: ["direct"],
     reactions: true,
     media: false,
+  },
+  execApprovals: {
+    getInitiatingSurfaceState: ({ cfg, accountId }) => {
+      const account = resolveR2RelayAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        return { kind: "disabled" };
+      }
+      return { kind: "enabled" };
+    },
   },
   reload: { configPrefixes: ["channels.r2-relay-channel"] },
   configSchema: r2RelayChannelConfigSchema,
@@ -579,13 +588,15 @@ async function dispatchInboundMessage(params: {
     });
   };
 
-  const emitFinalMessage = async (text: string) => {
+  const emitFinalMessage = async (text: string, channelData?: Record<string, unknown> | null) => {
     const normalized = normalizeStreamText(text);
-    if (!normalized.trim()) {
+    const hasText = normalized.trim().length > 0;
+    const hasChannelData = Boolean(channelData && Object.keys(channelData).length > 0);
+    if (!hasText && !hasChannelData) {
       return;
     }
 
-    if (streamState.active) {
+    if (streamState.active && hasText) {
       if (streamState.lastText && !normalized.startsWith(streamState.lastText)) {
         return;
       }
@@ -603,6 +614,7 @@ async function dispatchInboundMessage(params: {
         streamId: null,
         streamSeq: null,
         streamState: null,
+        channelData: channelData ?? null,
       },
     );
     touchRuntime(params.account.accountId, {
@@ -612,23 +624,35 @@ async function dispatchInboundMessage(params: {
     resetStream();
   };
 
-  await dispatchInboundReplyWithBase({
+  await core.channel.session.recordInboundSession({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+    onRecordError: () => {},
+  });
+
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg as any,
+    agentId: route.agentId,
     channel: "r2-relay-channel",
     accountId: params.account.accountId,
-    route,
-    storePath,
-    ctxPayload,
-    core,
-    deliver: async (payload) => {
-      const text = payload.text ?? "";
-      await emitFinalMessage(text);
-    },
-    onRecordError: () => {},
-    onDispatchError: (err) => {
-      throw err instanceof Error ? err : new Error(String(err));
+  });
+
+  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
+    cfg: params.cfg as any,
+    dispatcherOptions: {
+      ...replyPipeline,
+      deliver: async (payload) => {
+        const text = payload.text ?? "";
+        await emitFinalMessage(text, payload.channelData ?? null);
+      },
+      onError: (err) => {
+        throw err instanceof Error ? err : new Error(String(err));
+      },
     },
     replyOptions: {
+      onModelSelected,
       onAssistantMessageStart: async () => {},
       onReasoningEnd: async () => {},
       onPartialReply: async (payload) => {
