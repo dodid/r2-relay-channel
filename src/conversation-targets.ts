@@ -77,9 +77,11 @@ export function buildWebhookPath(peer: string, sessionKey: string): string {
   return `/r2-relay-channel/webhook/${encodeURIComponent(peer)}/${encodeURIComponent(sessionKey)}`;
 }
 
-export function buildWebhookUrl(cfg: { gateway?: { publicBaseUrl?: string | null; externalUrl?: string | null; bindUrl?: string | null; remote?: { url?: string | null } | null } }, peer: string, sessionKey: string): string | null {
+export function buildWebhookUrl(cfg: { gateway?: { publicBaseUrl?: string | null; externalUrl?: string | null; bindUrl?: string | null; port?: number | null; remote?: { url?: string | null } | null } }, peer: string, sessionKey: string): string | null {
   const pathPart = buildWebhookPath(peer, sessionKey);
+  const localBase = resolveLocalGatewayBaseUrl(cfg);
   const base =
+    localBase ||
     cfg.gateway?.publicBaseUrl?.trim() ||
     cfg.gateway?.externalUrl?.trim() ||
     cfg.gateway?.remote?.url?.trim() ||
@@ -100,6 +102,14 @@ export function buildWebhookUrl(cfg: { gateway?: { publicBaseUrl?: string | null
 
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
+}
+
+function resolveLocalGatewayBaseUrl(cfg: { gateway?: { port?: number | null } }): string | null {
+  const port = cfg.gateway?.port;
+  if (typeof port === "number" && Number.isFinite(port) && port > 0) {
+    return `http://127.0.0.1:${port}`;
+  }
+  return null;
 }
 
 function normalizeWebhookBaseUrl(value: string): string {

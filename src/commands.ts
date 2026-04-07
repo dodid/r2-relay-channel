@@ -31,6 +31,12 @@ async function handleRelayCommand(ctx: PluginCommandContext): Promise<{ text: st
   const cronTo = buildCronTarget(target.peer, target.sessionKey);
   const cronSnippet = `--announce --channel r2-relay-channel --to '${cronTo}'`;
   const webhook = buildWebhookUrl(ctx.config as any, target.peer, target.sessionKey) ?? buildWebhookPath(target.peer, target.sessionKey);
+  const curlSnippet = [
+    `curl -X POST '${webhook}'`,
+    "  -H 'Authorization: Bearer <cron.webhookToken>'",
+    "  -H 'Content-Type: application/json'",
+    "  --data '{\"text\":\"hello from curl\"}'",
+  ].join(" \\\n");
 
   return {
     text: [
@@ -42,6 +48,11 @@ async function handleRelayCommand(ctx: PluginCommandContext): Promise<{ text: st
       "To send webhook payloads to this session, use:",
       "```TEXT",
       webhook,
+      "```",
+      "",
+      "To test it locally with curl, use:",
+      "```TEXT",
+      curlSnippet,
       "```",
     ].join("\n"),
   };

@@ -50,22 +50,6 @@ You can inspect the installed plugin with:
 openclaw plugins inspect r2-relay-channel
 ```
 
-## Overwrite an installed plugin in place from a `.tgz`
-
-If you want to unpack a built tarball directly over an existing installed plugin directory without deleting the directory itself, use:
-
-```bash
-./scripts/overwrite-installed-plugin.sh /path/to/r2-relay-channel-x.y.z.tgz /path/to/installed/plugin-dir
-```
-
-Example:
-
-```bash
-./scripts/overwrite-installed-plugin.sh ./r2-relay-channel-0.2.0.tgz ~/.openclaw/plugins/r2-relay-channel
-```
-
-This overwrites files that exist in the tarball but does not remove stale files already present in the destination directory.
-
 ## Configure OpenClaw
 
 Use the OpenClaw config wizard.
@@ -99,23 +83,7 @@ The wizard writes the channel settings into the plugin-side config file:
 <plugin-folder>/r2relay.config.json
 ```
 
-and keeps the main OpenClaw config minimal by only enabling the channel (and preserving a custom `configFile` path if you explicitly set one).
-
-By default, the sidecar uses these retention settings:
-
-```json
-{
-  "ttl": {
-    "msg": 7,
-    "att": 7,
-    "identity": 1,
-    "head": 30
-  }
-}
-```
-
-The plugin enforces retention with a daily sweeper:
-- the gateway runs the sweeper in-process once per day after startup
+and keeps the main OpenClaw config minimal by only enabling the channel and preserving a custom `configFile` path.
 
 After completing the wizard, restart the gateway:
 
@@ -224,7 +192,7 @@ It forwards the first non-empty value from `text`, `summary`, or `error` into th
   },
   "delivery": {
     "mode": "webhook",
-    "to": "https://example.com/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain"
+    "to": "http://127.0.0.1:18789/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain"
   }
 }
 ```
