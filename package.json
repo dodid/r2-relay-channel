@@ -1,6 +1,6 @@
 {
   "name": "r2-relay-channel",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "OpenClaw R2 relay channel plugin",
   "type": "module",
   "main": "dist/r2-relay.js",
@@ -33,6 +33,14 @@
     "extensions": [
       "./dist/r2-relay.js"
     ],
+    "compat": {
+      "pluginApi": ">=2026.3.24",
+      "minGatewayVersion": "2026.3.24"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24",
+      "pluginSdkVersion": "2026.3.24"
+    },
     "setupEntry": "./dist/setup-entry.js",
     "channel": {
       "id": "r2-relay-channel",

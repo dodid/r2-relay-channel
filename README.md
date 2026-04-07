@@ -54,6 +54,15 @@ OpenClaw should expose `R2 Relay` as a channel setup flow and prompt for:
 
 The wizard suggests a short random server ID candidate automatically, and you can keep it or edit it. Keep it unique if you have multiple gateways sharing the same R2 bucket.
 
+### Install ClawChat on iOS
+
+To use this relay from iPhone or iPad, install ClawChat via TestFlight:
+
+1. On your iOS device, open: https://testflight.apple.com/join/4941GHDE
+2. Accept the TestFlight invitation.
+3. Install ClawChat from TestFlight.
+4. Open ClawChat and enter the same R2 connection details you configured for this plugin.
+
 ### `/session-target` command
 
 The plugin registers a command that shows the current conversation's relay targets, which can be used for cron job delivery or direct webhook POSTing.
@@ -191,6 +200,15 @@ OpenClaw 应显示 `R2 Relay` 的通道配置流程，并提示你输入：
 - gateway server ID
 
 向导会自动给出一个简短的随机 server ID 候选值。你可以直接使用，也可以修改。若多个 gateway 共享同一个 R2 bucket，请确保每个 server ID 唯一。
+
+### 在 iOS 上安装 ClawChat
+
+若要在 iPhone 或 iPad 上使用这个 relay，请通过 TestFlight 安装 ClawChat：
+
+1. 在 iOS 设备上打开：https://testflight.apple.com/join/4941GHDE
+2. 接受 TestFlight 邀请。
+3. 在 TestFlight 中安装 ClawChat。
+4. 打开 ClawChat，并填写与本插件一致的 R2 连接信息。
 
 ### `/session-target` 命令
 
