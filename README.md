@@ -1,58 +1,42 @@
 # r2-relay-channel
 
+- [English](#english)
+- [简体中文](#simplified-chinese)
+
+---
+
+<a id="english"></a>
+
+## English
+
 `r2-relay-channel` is an OpenClaw channel plugin that uses Cloudflare R2 as a lightweight relay layer for chat delivery.
 
 It is designed for setups where an OpenClaw server publishes session metadata and exchanges messages through an object-store-backed protocol instead of a conventional always-on websocket or direct mobile push transport.
 
-## What it does
-
-The plugin provides an R2-backed messaging channel for OpenClaw.
-
-Core capabilities:
-- publishes gateway identity and active session metadata
-- appends messages into recipient-specific chains stored in R2
-- reads inbox heads and walks message chains safely
-- handles streaming-oriented message updates in the relay layer
-- accepts authenticated cron webhook delivery and forwards summaries into a specific relay session
-- packages cleanly as an OpenClaw plugin
-
-## Why this exists
+### Why this exists
 
 - **No ports open** — your server stays behind its firewall instead of being exposed directly to the internet.
 - **Instant setup** — connect once without juggling bots, webhooks, or extra chat platform plumbing.
 - **You own your data** — conversations live in your own Cloudflare R2 bucket, not on someone else's hosted chat service.
 - **Chat your way** — the same OpenClaw backend can power a friendly mobile chat UI or a more terminal-style interface for power users.
 
-## Requirements
+### Requirements
 
 - OpenClaw `2026.3.24` or later
 - a Cloudflare R2 bucket
 - an R2 endpoint URL
 - an access key id and secret access key with bucket access
 
-## Install the plugin in OpenClaw
+### Install the plugin in OpenClaw
 
-Install the packaged tarball with OpenClaw:
-
-```bash
-openclaw plugins install /path/to/r2-relay-channel-x.y.z.tgz
-```
-
-If installation succeeds, restart the gateway:
+Install directly from ClawHub by plugin id:
 
 ```bash
+openclaw plugins install r2-relay-channel
 openclaw gateway restart
 ```
 
-You can inspect the installed plugin with:
-
-```bash
-openclaw plugins inspect r2-relay-channel
-```
-
-## Configure OpenClaw
-
-Use the OpenClaw config wizard.
+### Configure OpenClaw
 
 After installing the plugin, run:
 
@@ -60,13 +44,8 @@ After installing the plugin, run:
 openclaw configure
 ```
 
-or:
+OpenClaw should expose `R2 Relay` as a channel setup flow and prompt for:
 
-```bash
-openclaw onboard
-```
-
-OpenClaw should expose `r2-relay-channel` as a channel setup flow and prompt for:
 - R2 endpoint URL
 - bucket name
 - access key ID
@@ -75,27 +54,9 @@ OpenClaw should expose `r2-relay-channel` as a channel setup flow and prompt for
 
 The wizard suggests a short random server ID candidate automatically, and you can keep it or edit it. Keep it unique if you have multiple gateways sharing the same R2 bucket.
 
-### What the wizard saves
+### `/session-target` command
 
-The wizard writes the channel settings into the plugin-side config file:
-
-```text
-<plugin-folder>/r2relay.config.json
-```
-
-and keeps the main OpenClaw config minimal by only enabling the channel and preserving a custom `configFile` path.
-
-After completing the wizard, restart the gateway:
-
-```bash
-openclaw gateway restart
-```
-
-Once configured, use the same R2 connection details in ClawChat app.
-
-## `/session-target` command
-
-The plugin registers a command that shows the current conversation's relay targets.
+The plugin registers a command that shows the current conversation's relay targets, which can be used for cron job delivery or direct webhook POSTing.
 
 After at least one inbound relay message has established conversation state, run:
 
@@ -106,15 +67,13 @@ After at least one inbound relay message has established conversation state, run
 It returns two copy-pasteable code blocks:
 
 - the cron target string
-- the webhook URL or webhook path
+- the webhook URL
 
-## Native `--channel r2-relay-channel --to ...` delivery
+#### Cron target string
 
 The plugin supports native OpenClaw delivery targeting through `--channel r2-relay-channel` and a provider-specific `--to` format.
 
-### Target format
-
-Preferred deterministic target format:
+The target format:
 
 ```text
 peer=<peer>,session=<sessionKey>
@@ -139,15 +98,12 @@ Notes:
 - `peer` is the relay recipient id.
 - `session` is the exact OpenClaw session key to route into.
 - `,` and `=` are reserved inside values in this minimal format.
-- For backward compatibility, a bare target like `phone-abc123` is still accepted, but it sends without an explicit `sessionKey`.
 
-## Cron webhook delivery to a specific relay session
+#### Webhook URL
 
 The plugin exposes a minimal webhook endpoint for cron jobs.
 
 Authentication uses OpenClaw's existing `cron.webhookToken`; there is no separate plugin token.
-
-### Requirements
 
 Set a cron webhook token in your OpenClaw config:
 
@@ -159,20 +115,6 @@ Set a cron webhook token in your OpenClaw config:
 }
 ```
 
-### Webhook path
-
-```text
-/r2-relay-channel/webhook/<peer>/<url-encoded-session-key>
-```
-
-Examples:
-
-```text
-/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain
-```
-
-### What the webhook accepts
-
 The endpoint expects a JSON POST body. It accepts:
 
 - cron finished-event payloads with a `summary` field
@@ -181,69 +123,162 @@ The endpoint expects a JSON POST body. It accepts:
 
 It forwards the first non-empty value from `text`, `summary`, or `error` into the specified relay session.
 
-### Cron example
+Curl example:
 
-```json
+```bash
+curl -X POST 'http://127.0.0.1:18789/r2-relay-channel/webhook/moss-river-w5/agent%3Amain%3Amain' \
+  -H 'Authorization: Bearer <cron.webhookToken>' \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"hello from curl"}'
+```
+
+### Uninstall the plugin from OpenClaw
+
+To remove the plugin:
+
+```bash
+openclaw plugins uninstall r2-relay-channel
+openclaw gateway restart
+```
+
+---
+
+<a id="simplified-chinese"></a>
+
+## 简体中文
+
+`r2-relay-channel` 是一个 OpenClaw 通道插件，使用 Cloudflare R2 作为轻量中继层来传递聊天消息。
+
+它适用于这样的部署方式：OpenClaw 服务器负责发布会话元数据与消息交换，但底层通过对象存储协议完成中继，而不是依赖常驻 WebSocket 或直接移动推送。
+
+### 这个插件为什么存在
+
+- **无需开放端口**：你的服务器可以继续留在防火墙后，不必直接暴露到公网。
+- **部署快速**：一次接入即可工作，无需再拼装 bot、webhook 或额外聊天平台链路。
+- **数据归你所有**：会话数据存放在你自己的 Cloudflare R2 bucket，而不是第三方托管聊天服务。
+- **聊天形态自由**：同一个 OpenClaw 后端既可驱动移动端友好 UI，也可支持偏终端风格的高阶交互。
+
+### 依赖要求
+
+- OpenClaw `2026.3.24` 或更高版本
+- 一个 Cloudflare R2 bucket
+- 一个 R2 endpoint URL
+- 对该 bucket 有访问权限的 access key id 与 secret access key
+
+### 在 OpenClaw 中安装插件
+
+通过 ClawHub 使用插件 ID 直接安装：
+
+```bash
+openclaw plugins install r2-relay-channel
+openclaw gateway restart
+```
+
+### 配置 OpenClaw
+
+安装后执行：
+
+```bash
+openclaw configure
+```
+
+OpenClaw 应显示 `R2 Relay` 的通道配置流程，并提示你输入：
+
+- R2 endpoint URL
+- bucket name
+- access key ID
+- secret access key
+- gateway server ID
+
+向导会自动给出一个简短的随机 server ID 候选值。你可以直接使用，也可以修改。若多个 gateway 共享同一个 R2 bucket，请确保每个 server ID 唯一。
+
+### `/session-target` 命令
+
+插件会注册一个命令，用于显示当前会话可用的中继目标，可用于 cron 投递或直接 webhook POST。
+
+至少先让一条入站中继消息建立会话状态，然后运行：
+
+```text
+/session-target
+```
+
+命令会返回两个可复制的代码块：
+
+- cron target string
+- webhook URL
+
+#### Cron target string
+
+插件支持 OpenClaw 原生投递目标：`--channel r2-relay-channel` 搭配 provider 专用 `--to` 格式。
+
+目标格式：
+
+```text
+peer=<peer>,session=<sessionKey>
+```
+
+示例：
+
+```bash
+openclaw cron add \
+  --name "Morning brief" \
+  --cron "0 7 * * *" \
+  --tz "America/Los_Angeles" \
+  --session isolated \
+  --message "Summarize overnight updates." \
+  --announce \
+  --channel r2-relay-channel \
+  --to 'peer=phone-abc123,session=agent:main:main'
+```
+
+说明：
+
+- `peer` 是中继接收端 id。
+- `session` 是需要路由到的 OpenClaw 精确 session key。
+- 该最小格式中，值内部保留字符为 `,` 与 `=`。
+
+#### Webhook URL
+
+插件提供一个简化 webhook 端点供 cron 调用。
+
+认证沿用 OpenClaw 已有的 `cron.webhookToken`，无需单独插件 token。
+
+请先在 OpenClaw 配置中设置 cron webhook token：
+
+```json5
 {
-  "schedule": { "kind": "cron", "expr": "0 9 * * *" },
-  "payload": {
-    "kind": "agentTurn",
-    "message": "Prepare the morning summary"
-  },
-  "delivery": {
-    "mode": "webhook",
-    "to": "http://127.0.0.1:18789/r2-relay-channel/webhook/phone-abc123/agent%3Amain%3Amain"
+  cron: {
+    webhookToken: "replace-with-a-random-secret"
   }
 }
 ```
 
-When cron runs this job, OpenClaw sends:
+端点接收 JSON POST 请求，支持：
 
-- `Authorization: Bearer <cron.webhookToken>`
-- the cron finished event JSON body
+- 包含 `summary` 字段的 cron finished event 负载
+- 包含 `text` 字段的手工请求负载
+- 包含 `error` 字段的错误负载
 
-and the plugin forwards the resulting summary text into the target relay session.
+插件会按 `text`、`summary`、`error` 的优先顺序选择第一个非空值，并转发到指定 relay session。
 
-## Uninstall the plugin from OpenClaw
+Curl 示例：
 
-To remove the plugin:
+```bash
+curl -X POST 'http://127.0.0.1:18789/r2-relay-channel/webhook/moss-river-w5/agent%3Amain%3Amain' \
+  -H 'Authorization: Bearer <cron.webhookToken>' \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"hello from curl"}'
+```
 
-1. remove or disable the `r2-relay-channel` entry from your OpenClaw config
-2. uninstall the plugin
-3. restart the gateway
+### 从 OpenClaw 卸载插件
 
-Example uninstall command:
+执行以下命令：
 
 ```bash
 openclaw plugins uninstall r2-relay-channel
-```
-
-If `openclaw plugins uninstall r2-relay-channel` fails with an error like `unknown channel id: r2-relay-channel`, OpenClaw has already unloaded the plugin before validating the updated config.
-
-In that case, use this manual recovery sequence:
-
-1. edit your OpenClaw config and remove both:
-   - `channels."r2-relay-channel"`
-   - `plugins.entries."r2-relay-channel"`
-2. save the config
-3. remove the installed plugin directory if it still exists:
-
-```bash
-rm -rf ~/.openclaw/extensions/r2-relay-channel
-```
-
-4. restart the gateway:
-
-```bash
-openclaw gateway restart
-```
-
-Then restart:
-
-```bash
 openclaw gateway restart
 ```
 
 ## License
 
-BSD 3-Clause License. See [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE).
