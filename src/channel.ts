@@ -4,8 +4,7 @@ import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/nextcloud-talk";
-import { jsonResult, readReactionParams, readStringParam } from "openclaw/plugin-sdk/telegram-core";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import {
@@ -34,6 +33,75 @@ import { rememberConversationTarget } from "./conversation-targets.js";
 const activeServices = new Map<string, Service>();
 const publishedSessionSignatures = new Map<string, string>();
 const publishedIdentityAt = new Map<string, number>();
+
+function jsonResult(payload: Record<string, unknown>) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
+    details: payload,
+    channelData: payload,
+  };
+}
+
+function readStringParam(
+  params: Record<string, unknown>,
+  key: string,
+  options?: { required?: boolean },
+): string {
+  const value = params[key];
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0 || !options?.required) {
+      return trimmed;
+    }
+  }
+  if (options?.required) {
+    throw new Error(`Missing required parameter: ${key}`);
+  }
+  return "";
+}
+
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
+  const value = params[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "n", "off", ""].includes(normalized)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function readReactionParams(
+  params: Record<string, unknown>,
+  options?: { removeErrorMessage?: string },
+): { emoji: string; remove: boolean; isEmpty: boolean } {
+  const emoji = readStringParam(params, "emoji") || readStringParam(params, "reaction");
+  const remove = readBooleanParam(params, "remove");
+  const isEmpty = emoji.length === 0;
+
+  if (remove && isEmpty) {
+    throw new Error(options?.removeErrorMessage ?? "remove=true requires a specific emoji.");
+  }
+  if (!remove && isEmpty) {
+    throw new Error("Missing required parameter: emoji");
+  }
+
+  return { emoji, remove, isEmpty };
+}
 
 type RelayRuntimeState = Omit<ReturnType<typeof createDefaultChannelRuntimeState>, "running" | "lastStartAt" | "lastStopAt" | "lastError"> & {
   running: boolean;
