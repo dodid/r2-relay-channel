@@ -818,6 +818,9 @@ async function collectPublishedSessions(_account: ResolvedR2RelayAccount): Promi
         if (sessionKey === `agent:${agentId}:main`) {
           hasMainSession = true;
         }
+        if (!shouldPublishIdentitySession(sessionKey)) {
+          continue;
+        }
         sessions.push(identitySessionDocFromEntry(sessionKey, entry));
       }
     } catch {
@@ -830,6 +833,26 @@ async function collectPublishedSessions(_account: ResolvedR2RelayAccount): Promi
   }
 
   return sessions.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
+
+function shouldPublishIdentitySession(sessionKey: string): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("cron:")) {
+    return false;
+  }
+
+  const parts = normalized.split(":");
+  if (parts.length >= 3 && parts[0] === "agent") {
+    const scopedKey = parts.slice(2).join(":");
+    if (scopedKey.startsWith("cron:")) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function listConfiguredAgentIds(): string[] {
