@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import {
   DEFAULT_BACKOFF_MAX_MS,
@@ -26,7 +27,7 @@ import {
 } from "./checkpoint-store.js";
 import { getRelayConfig, getRelayRuntime } from "./runtime.js";
 import { IDENTITY_REFRESH_INTERVAL_MS, RELAY_PLUGIN_VERSION, Service } from "./service.js";
-import type { IdentitySessionDoc } from "./protocol.js";
+import type { AttachmentRef, IdentitySessionDoc } from "./protocol.js";
 import { formatRelayTargetHint, parseRelayTarget } from "./target.js";
 import { rememberConversationTarget } from "./conversation-targets.js";
 
@@ -133,7 +134,7 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
   capabilities: {
     chatTypes: ["direct"],
     reactions: true,
-    media: false,
+    media: true,
   },
   execApprovals: {
     getInitiatingSurfaceState: ({ cfg, accountId }) => {
@@ -231,6 +232,68 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
         sessionId: null,
         serverPeer: account.serverId,
         typeOverride: "text",
+      });
+      touchRuntime(account.accountId, {
+        lastOutboundAt: Date.now(),
+        lastError: null,
+      });
+      return {
+        channel: "r2-relay-channel",
+        to: to.trim(),
+        messageId: result.messageId,
+        timestamp: Date.now(),
+      };
+    },
+    sendPayload: async ({ cfg, to, payload, accountId }) => {
+      const account = resolveR2RelayAccount({ cfg, accountId });
+      const service = getOrCreateService(account);
+      const target = parseRelayTarget(to);
+
+      const text = payload.text ?? "";
+      const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+
+      const attachments: AttachmentRef[] = [];
+      if (mediaUrls.length > 0) {
+        const relay = service.relay;
+        const messageId = relay.shortUuid();
+        const nowMs = Date.now();
+        for (let i = 0; i < mediaUrls.length; i++) {
+          const url = mediaUrls[i];
+          if (!url) continue;
+          const attKey = relay.makeAttKey(target.peer, messageId, i + 1, undefined, nowMs);
+          try {
+            const resp = await fetch(url);
+            if (!resp.ok) continue;
+            const contentType = resp.headers.get("content-type") || "application/octet-stream";
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            await service.client.putObject(attKey, buffer, contentType, undefined, undefined, "*");
+            attachments.push({
+              id: `att-${messageId}-${i + 1}`,
+              key: attKey,
+              file_name: url.split("/").pop()?.split("?")[0] ?? null,
+              content_type: contentType,
+              size: buffer.length,
+              sha256: null,
+              kind: inferKindFromMediaType(contentType),
+              width: null,
+              height: null,
+              duration_ms: null,
+              preview_image_key: null,
+              preview_image_type: null,
+              preview_size: null,
+            });
+          } catch {
+            // skip failed media downloads
+          }
+        }
+      }
+
+      const result = await service.sendMessage(target.peer, text, attachments.length > 0 ? attachments : undefined, {
+        sessionKey: target.sessionKey,
+        sessionId: null,
+        serverPeer: account.serverId,
+        typeOverride: "text",
+        channelData: payload.channelData ?? null,
       });
       touchRuntime(account.accountId, {
         lastOutboundAt: Date.now(),
@@ -454,6 +517,7 @@ async function pollRelayInbox(params: {
             messageId: msg.msg_id,
             sessionKey: msg.session_key ?? null,
             sessionId: msg.session_id ?? null,
+            attachments: msg.attachments ?? [],
           });
 
           state = rememberMessage(state, {
@@ -520,6 +584,7 @@ async function dispatchInboundMessage(params: {
   messageId: string;
   sessionKey?: string | null;
   sessionId?: string | null;
+  attachments?: AttachmentRef[];
 }): Promise<void> {
   const core = getRelayRuntime();
   const resolvedRoute = core.channel.routing.resolveAgentRoute({
@@ -546,6 +611,47 @@ async function dispatchInboundMessage(params: {
     },
   );
 
+  const attachmentContext = formatAttachmentContext(params.attachments);
+  const agentText = attachmentContext
+    ? `${params.text}\n\n${attachmentContext}`
+    : params.text;
+
+  // First step for relay ingest parity: stage supported images locally so OpenClaw
+  // sees real inbound media files instead of only attachment manifest text.
+  const mediaUrls: string[] = [];
+  const mediaPaths: string[] = [];
+  const mediaTypes: string[] = [];
+  if (params.attachments) {
+    for (const att of params.attachments) {
+      if (!att.key || !isImageAttachment(att)) {
+        continue;
+      }
+
+      try {
+        const url = await params.service.getPresignedUrl(att.key, 3600);
+        const fetched = await core.channel.media.fetchRemoteMedia({
+          url,
+          maxBytes: MAX_IMAGE_BYTES,
+        });
+        const saved = await core.channel.media.saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType ?? att.content_type ?? undefined,
+          "inbound",
+          MAX_IMAGE_BYTES,
+          att.file_name ?? fetched.fileName,
+        );
+
+        mediaUrls.push(url);
+        mediaPaths.push(saved.path);
+        mediaTypes.push(saved.contentType ?? fetched.contentType ?? att.content_type ?? "application/octet-stream");
+      } catch (err) {
+        getRelayRuntime().logging.getChildLogger().error(
+          `[${params.account.accountId}] failed to stage inbound relay image ${att.key}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg as any);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
@@ -557,12 +663,12 @@ async function dispatchInboundMessage(params: {
     timestamp: params.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: params.text,
+    body: agentText,
   });
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: params.text,
+    BodyForAgent: agentText,
     RawBody: params.text,
     CommandBody: params.text,
     CommandAuthorized: true,
@@ -579,6 +685,14 @@ async function dispatchInboundMessage(params: {
     Timestamp: params.timestamp,
     OriginatingChannel: "r2-relay-channel",
     OriginatingTo: `r2-relay-channel:${params.account.serverId}`,
+    ...(mediaPaths.length > 0 ? {
+      MediaPath: mediaPaths[0],
+      MediaPaths: mediaPaths,
+      MediaUrls: mediaUrls,
+      MediaTypes: mediaTypes,
+      MediaUrl: mediaUrls[0],
+      MediaType: mediaTypes[0]
+    } : {}),
   });
 
   rememberConversationTarget({
@@ -773,7 +887,7 @@ async function syncPublishedIdentity(service: Service, account: ResolvedR2RelayA
     display_name: deriveGatewayDisplayName(account.serverId),
     role: "server",
     plugin_version: RELAY_PLUGIN_VERSION,
-    capabilities: ["text", "protocol:v1", "session-selection:v1"],
+    capabilities: ["text", "media", "attachments:v1", "protocol:v1", "session-selection:v1"],
     contact: null,
     last_seen: now,
     sessions,
@@ -957,12 +1071,25 @@ async function sendProcessedConfirmation(params: {
 function formatInboundRelayBody(msg: {
   type?: string;
   body?: string;
+  attachments?: { file_name?: string | null; kind?: string | null }[] | null;
   reaction_emoji?: string | null;
   reaction_target_msg_id?: string | null;
   reaction_remove?: boolean | null;
 }): string {
   if (msg.type !== "reaction") {
-    return msg.body ?? "";
+    const body = msg.body?.trim() ?? "";
+    if (body) return body;
+    // attachment-only message: produce a short description so the agent context is never empty
+    const atts = msg.attachments;
+    if (atts && atts.length > 0) {
+      if (atts.length === 1) {
+        const att = atts[0];
+        const label = att.file_name ?? (att.kind && att.kind !== "unknown" ? att.kind : "attachment");
+        return `[Sent ${label}]`;
+      }
+      return `[Sent ${atts.length} attachments]`;
+    }
+    return body;
   }
 
   const emoji = msg.reaction_emoji ?? msg.body ?? "";
@@ -1042,4 +1169,35 @@ function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
     };
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function inferKindFromMediaType(type?: string | null): AttachmentRef["kind"] {
+  if (!type) return "file";
+  const lower = type.toLowerCase();
+  if (lower.startsWith("image/")) return "image";
+  if (lower.startsWith("video/")) return "video";
+  if (lower.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function isImageAttachment(attachment: AttachmentRef): boolean {
+  if (attachment.kind === "image") {
+    return true;
+  }
+  return Boolean(attachment.content_type?.toLowerCase().startsWith("image/"));
+}
+
+function formatAttachmentContext(attachments?: AttachmentRef[]): string | null {
+  if (!attachments || attachments.length === 0) return null;
+  const lines = attachments.map((att, i) => {
+    const parts: string[] = [`[Attachment ${i + 1}]`];
+    if (att.file_name) parts.push(`name: ${att.file_name}`);
+    if (att.content_type) parts.push(`type: ${att.content_type}`);
+    if (att.kind && att.kind !== "unknown") parts.push(`kind: ${att.kind}`);
+    if (att.size) parts.push(`size: ${att.size} bytes`);
+    if (att.width && att.height) parts.push(`dimensions: ${att.width}x${att.height}`);
+    if (att.duration_ms) parts.push(`duration: ${(att.duration_ms / 1000).toFixed(1)}s`);
+    return parts.join(", ");
+  });
+  return lines.join("\n");
 }

@@ -1,3 +1,21 @@
+export type AttachmentKind = "image" | "video" | "audio" | "file" | "unknown";
+
+export interface AttachmentRef {
+  id: string;
+  key: string;
+  file_name: string | null;
+  content_type: string | null;
+  size: number | null;
+  sha256: string | null;
+  kind: AttachmentKind;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  preview_image_key: string | null;
+  preview_image_type: string | null;
+  preview_size: number | null;
+}
+
 export interface MessageMeta {
   msg_id: string;
   from: string;
@@ -9,7 +27,7 @@ export interface MessageMeta {
   reaction_target_msg_id?: string | null;
   reaction_emoji?: string | null;
   reaction_remove?: boolean | null;
-  attachments?: { key: string; size?: number; content_type?: string }[];
+  attachments?: AttachmentRef[];
   size?: number;
   sig?: string | null;
   session_key?: string | null;
@@ -90,11 +108,12 @@ export class R2Relay {
     return `msg/${recipient}/${this.padRevTs(ts)}-${this.shortUuid()}.json`;
   }
 
-  makeAttKey(recipient: string, name?: string, nowMs?: number) {
+  makeAttKey(recipient: string, messageId: string, index: number, name?: string, nowMs?: number) {
     const ts = nowMs ?? Date.now();
-    const id = this.shortUuid();
+    const safeMessageId = messageId.replace(/[^a-zA-Z0-9._-]/g, "");
+    const safeIndex = String(index).padStart(2, "0");
     const safeName = name ? `-${name.replace(/[^a-zA-Z0-9._-]/g, "")}` : "";
-    return `att/${recipient}/${this.padRevTs(ts)}-${id}${safeName}`;
+    return `att/${recipient}/${this.padRevTs(ts)}-${safeMessageId}-${safeIndex}${safeName}`;
   }
 
   makeHeadKey(recipient: string) {

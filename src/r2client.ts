@@ -1,3 +1,4 @@
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -35,6 +36,11 @@ export class R2Client {
         : undefined,
       forcePathStyle: cfg.forcePathStyle ?? true,
     });
+  }
+
+  async getPresignedUrl(key: string, expiresIn: number): Promise<string> {
+    const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    return getSignedUrl(this.s3, command, { expiresIn });
   }
 
   async putObject(

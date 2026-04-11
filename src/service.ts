@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { R2Client } from "./r2client.js";
-import { HeadDoc, IdentityDoc, MessageMeta, R2Relay } from "./protocol.js";
+import { AttachmentRef, HeadDoc, IdentityDoc, MessageMeta, R2Relay } from "./protocol.js";
 
 export const IDENTITY_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
@@ -86,12 +86,16 @@ export class Service {
     this.relay = new R2Relay({ bucket: cfg.bucket });
   }
 
+  async getPresignedUrl(key: string, expiresIn: number): Promise<string> {
+    return this.client.getPresignedUrl(key, expiresIn);
+  }
+
   async publishIdentity(identity?: Partial<IdentityDoc>) {
     const key = this.relay.makeIdentityKey(this.cfg.peerId);
     const doc: IdentityDoc = {
       role: "server",
       plugin_version: RELAY_PLUGIN_VERSION,
-      capabilities: ["text", "protocol:v1", "assistant-stream-snapshots:v1"],
+      capabilities: ["text", "media", "attachments:v1", "protocol:v1", "assistant-stream-snapshots:v1"],
       contact: null,
       ...(identity ?? {}),
       peer: identity?.peer ?? this.cfg.peerId,
@@ -122,7 +126,7 @@ export class Service {
   async sendMessage(
     to: string,
     body: string,
-    attachments?: { key: string; size?: number; content_type?: string }[],
+    attachments?: AttachmentRef[],
     options?: SendMessageOptions,
   ) {
     const previous = this.sendLanes.get(to) ?? Promise.resolve({ key: "", messageId: "" });
@@ -142,7 +146,7 @@ export class Service {
   private async sendMessageUnlocked(
     to: string,
     body: string,
-    attachments?: { key: string; size?: number; content_type?: string }[],
+    attachments?: AttachmentRef[],
     options?: SendMessageOptions,
   ) {
     const now = Date.now();
@@ -160,7 +164,7 @@ export class Service {
         to,
         ts_sent: now,
         prev_key: prevKey,
-        type: options?.typeOverride ?? (hasStream ? "assistant_stream" : attachments && attachments.length ? "attachment" : "text"),
+        type: options?.typeOverride ?? (hasStream ? "assistant_stream" : "text"),
         body,
         attachments: attachments || [],
         size: body ? Buffer.byteLength(body) : 0,
