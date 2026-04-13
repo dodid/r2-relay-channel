@@ -90,6 +90,10 @@ export class Service {
     return this.client.getPresignedUrl(key, expiresIn);
   }
 
+  async getAttachmentObject(key: string) {
+    return this.client.getObject(key);
+  }
+
   async publishIdentity(identity?: Partial<IdentityDoc>) {
     const key = this.relay.makeIdentityKey(this.cfg.peerId);
     const doc: IdentityDoc = {

@@ -64,6 +64,18 @@ export interface IdentityModelDoc {
   provider?: string | null;
 }
 
+export interface IdentityServerAttachmentLimitsDoc {
+  image: number;
+  video: number;
+  audio: number;
+  file: number;
+}
+
+export interface IdentityServerLimitsDoc {
+  inbound_attachment_max_bytes?: IdentityServerAttachmentLimitsDoc;
+  oversize_attachment_behavior?: string | null;
+}
+
 export interface IdentityDoc {
   peer: string;
   role: string;
@@ -79,6 +91,7 @@ export interface IdentityDoc {
       default?: string | null;
     };
   };
+  server_limits?: IdentityServerLimitsDoc;
 }
 
 export interface R2RelayOptions {
