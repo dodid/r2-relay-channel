@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install latest OpenClaw build dependency
+        run: npm install --no-save openclaw@latest
+
       - name: Build plugin
         run: npm run build
 

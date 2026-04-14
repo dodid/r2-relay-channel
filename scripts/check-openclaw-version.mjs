@@ -24,7 +24,7 @@ function compareVersions(a, b) {
 }
 
 if (!fs.existsSync(pkgPath)) {
-  console.error("[r2-relay-channel] openclaw is not installed in node_modules. Install a compatible version before building.");
+  console.error("[r2-relay-channel] openclaw is not installed in node_modules. Install a compatible build-time version first (for example: npm install --no-save openclaw@2026.3.24) before running npm run build.");
   process.exit(1);
 }
 

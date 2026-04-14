@@ -1,6 +1,6 @@
 {
   "name": "r2-relay-channel",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "OpenClaw R2 relay channel plugin",
   "type": "module",
   "main": "dist/r2-relay.js",
