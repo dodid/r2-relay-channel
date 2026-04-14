@@ -138,13 +138,20 @@ export const r2RelayPlugin: ChannelPlugin<ResolvedR2RelayAccount> = {
     reactions: true,
     media: true,
   },
-  execApprovals: {
-    getInitiatingSurfaceState: ({ cfg, accountId }) => {
+  approvalCapability: {
+    getExecInitiatingSurfaceState: ({
+      cfg,
+      accountId,
+    }: {
+      cfg: Parameters<typeof resolveR2RelayAccount>[0]["cfg"];
+      accountId?: string | null;
+      action: "approve";
+    }) => {
       const account = resolveR2RelayAccount({ cfg, accountId });
       if (!account.enabled || !account.configured) {
-        return { kind: "disabled" };
+        return { kind: "disabled" as const };
       }
-      return { kind: "enabled" };
+      return { kind: "enabled" as const };
     },
   },
   reload: { configPrefixes: ["channels.r2-relay-channel"] },
