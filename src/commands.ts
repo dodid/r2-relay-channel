@@ -29,6 +29,7 @@ async function handleRelayCommand(ctx: PluginCommandContext): Promise<{ text: st
   }
 
   const cronTo = buildCronTarget(target.peer, target.sessionKey);
+  const sendSnippet = `openclaw message send --channel r2-relay-channel --target '${cronTo}' --message "hello"`;
   const cronSnippet = `--announce --channel r2-relay-channel --to '${cronTo}'`;
   const webhook = buildWebhookUrl(ctx.config as any, target.peer, target.sessionKey) ?? buildWebhookPath(target.peer, target.sessionKey);
   const curlSnippet = [
@@ -40,6 +41,11 @@ async function handleRelayCommand(ctx: PluginCommandContext): Promise<{ text: st
 
   return {
     text: [
+      "To send a message to this session directly, use:",
+      "```TEXT",
+      sendSnippet,
+      "```",
+      "",
       "To send cron output to this session, use:",
       "```TEXT",
       cronSnippet,

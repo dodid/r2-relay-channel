@@ -372,12 +372,12 @@ function createDefaultRuntimeState(accountId: string): RelayRuntimeState {
 }
 
 function emitRelayDebug(log: RelayPollLog | undefined, message: string, meta?: Record<string, unknown>) {
-  if (log?.info) {
-    log.info(message, meta);
-    return;
-  }
   if (log?.debug) {
     log.debug(message, meta);
+    return;
+  }
+  if (log?.info) {
+    log.info(message, meta);
     return;
   }
   if (meta) {

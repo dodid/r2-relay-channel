@@ -1,6 +1,6 @@
 {
   "name": "r2-relay-channel",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenClaw R2 relay channel plugin",
   "type": "module",
   "main": "dist/r2-relay.js",
@@ -13,8 +13,7 @@
   "scripts": {
     "build": "node scripts/check-openclaw-version.mjs && tsc -p tsconfig.json && node scripts/prepare-dist.mjs",
     "lint": "echo 'no-lint-config'",
-    "pack": "npm pack",
-    "prepare": "npm run build"
+    "pack": "npm pack"
   },
   "author": "Wei Wu",
   "license": "MIT",
@@ -26,9 +25,6 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.3.24"
   },
   "openclaw": {
     "extensions": [
