@@ -20,6 +20,10 @@ It is designed for setups where an OpenClaw server publishes session metadata an
 - **You own your data** — conversations live in your own Cloudflare R2 bucket, not on someone else's hosted chat service.
 - **Chat your way** — the same OpenClaw backend can power a friendly mobile chat UI or a more terminal-style interface for power users.
 
+### Security note
+
+OpenClaw's plugin code-safety audit may warn that this plugin reads local files and sends data over the network. That warning is expected here: outbound media delivery intentionally reads agent-produced local files (for example images referenced by reply payloads) and uploads them to the configured Cloudflare R2 relay bucket so they can be delivered as attachments. Review this behavior in `src/channel.ts` (`buildRelayAttachments`) and use the plugin only in workspaces and relay buckets you trust.
+
 ### Requirements
 
 - OpenClaw `2026.3.24` or later
