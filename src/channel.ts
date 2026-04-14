@@ -442,6 +442,18 @@ async function pollRelayInbox(params: {
 
   while (!abortSignal?.aborted) {
     try {
+      const pollStartedAt = Date.now();
+      const wakeGapThresholdMs = Math.max(120_000, interval * 5);
+      if (state.lastPollAt && pollStartedAt - state.lastPollAt >= wakeGapThresholdMs) {
+        log?.info?.(`[${account.accountId}] detected long poll gap; refreshing published identity`, {
+          lastPollAt: state.lastPollAt,
+          pollStartedAt,
+          gapMs: pollStartedAt - state.lastPollAt,
+          wakeGapThresholdMs,
+        });
+        await syncPublishedIdentity(service, account, true);
+      }
+
       const batch = await service.collectInboxMessages(account.serverId, state.lastHeadKey);
       const now = Date.now();
       state = { ...state, lastPollAt: now };
